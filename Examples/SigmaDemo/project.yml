@@ -1,0 +1,34 @@
+# Generates SigmaDemo.xcodeproj: `xcodegen` in this folder. The generated
+# project is committed, so opening it needs nothing but Xcode.
+name: SigmaDemo
+options:
+  bundleIdPrefix: space.nimbusgo
+  deploymentTarget:
+    iOS: "15.0"
+packages:
+  NimbusSigma:
+    path: ../..
+targets:
+  SigmaDemo:
+    type: application
+    platform: iOS
+    sources: [SigmaDemoApp.swift]
+    dependencies:
+      - package: NimbusSigma
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Sigma Demo
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        # Demo only: lets the app reach a cloud running on your Mac over plain HTTP.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: space.nimbusgo.sigmademo
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"

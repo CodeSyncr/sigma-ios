@@ -19,13 +19,14 @@ cat > "$PKG/Package.swift" <<'SWIFT'
 import PackageDescription
 let package = Package(
     name: "SigmaDemo",
-    platforms: [.iOS(.v15)],
+    platforms: [.iOS(.v16)],
     dependencies: [.package(path: "../../../..")],
     targets: [.executableTarget(name: "SigmaDemo", dependencies: [.product(name: "NimbusSigma", package: "sigma-ios")])]
 )
 SWIFT
 echo "Building…"
-swift build --package-path "$PKG" --triple arm64-apple-ios15.0-simulator --sdk "$SDK" 2>&1 | grep -E "error|Build complete" || true
+rm -f "$PKG/.build/arm64-apple-ios-simulator/debug/SigmaDemo"
+swift build --package-path "$PKG" --triple arm64-apple-ios16.0-simulator --sdk "$SDK" 2>&1 | grep -E "error|Build complete" || true
 BIN="$PKG/.build/arm64-apple-ios-simulator/debug/SigmaDemo"
 [ -x "$BIN" ] || { echo "The build failed."; exit 1; }
 
@@ -42,7 +43,7 @@ cat > "$APP/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
 <key>CFBundleVersion</key><string>1</string>
-<key>MinimumOSVersion</key><string>15.0</string>
+<key>MinimumOSVersion</key><string>16.0</string>
 <key>UILaunchScreen</key><dict/>
 <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoads</key><true/></dict>
@@ -57,5 +58,8 @@ xcrun simctl boot "$DEV" 2>/dev/null || true
 open -a Simulator
 xcrun simctl bootstatus "$DEV" -b >/dev/null
 xcrun simctl install "$DEV" "$APP"
-SIMCTL_CHILD_SIGMA_CLOUD="${SIGMA_CLOUD:-}" SIMCTL_CHILD_SIGMA_KEY="${SIGMA_KEY:-}" xcrun simctl launch "$DEV" space.nimbusgo.sigmademo >/dev/null
+# Every SIGMA_* setting (cloud, key, a sheet to open, the tour) reaches the app.
+xcrun simctl terminate "$DEV" space.nimbusgo.sigmademo 2>/dev/null || true
+for v in $(env | grep -oE "^SIGMA_[A-Z_]+"); do export "SIMCTL_CHILD_$v=${!v}"; done
+xcrun simctl launch "$DEV" space.nimbusgo.sigmademo >/dev/null
 echo "Running in the simulator. Enter the cloud address and a Sigma key in Settings (the gear) if you did not pass them."

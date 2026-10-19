@@ -7,7 +7,7 @@ import Foundation
 ///   account, and anything compiled into an app can be pulled back out of
 ///   it. **Do not ship this client inside an iOS app.** Keep the key on your
 ///   server, mint links there, and hand the app only the link — which is all
-///   ``SigmaEditor`` needs. `SigmaClient` is for server-side Swift (Vapor,
+///   ``SigmaSession`` needs. `SigmaClient` is for server-side Swift (Vapor,
 ///   Hummingbird), command-line tools, and prototypes.
 public struct SigmaClient: Sendable {
     public let baseURL: URL
@@ -164,18 +164,13 @@ public struct SigmaClient: Sendable {
 
     static func error(status: Int, body: Data) -> SigmaError {
         let message = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["error"] as? String ?? ""
-        switch status {
-        case 401: return .unauthorized(message)
-        case 402: return .quotaExceeded(message)
-        case 404: return .notFound(message)
-        default: return .server(status: status, message: message)
-        }
+        return SigmaError.from(status: status, message: message)
     }
 }
 
 /// Facts about the package itself.
 public enum NimbusSigma {
-    public static let version = "1.0.0"
+    public static let version = "2.1.0"
 }
 
 extension Data {

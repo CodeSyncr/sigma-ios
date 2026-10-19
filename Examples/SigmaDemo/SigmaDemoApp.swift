@@ -132,43 +132,94 @@ struct Settings: View {
 }
 
 struct SheetScreen: View {
-    @StateObject private var editor: SigmaEditor
+    @StateObject private var session: SigmaSession
+    @StateObject private var grid = SigmaGridController()
     @State private var shared: SigmaFile?
 
     init(id: Int) {
-        // The editor asks your server for a link when it opens, and again if one expires.
-        _editor = StateObject(wrappedValue: SigmaEditor { try await YourServer.editLink(for: id) })
+        // The session asks your server for a link when it opens, and again if one expires.
+        _session = StateObject(wrappedValue: SigmaSession { try await YourServer.editLink(for: id) })
     }
 
     var body: some View {
-        SigmaEditorView(editor: editor)
-            .ignoresSafeArea(edges: .bottom)
-            .navigationTitle(editor.title.isEmpty ? "Sheet" : editor.title)
+        SigmaSheetView(session: session, controller: grid)
+            .navigationTitle(session.title.isEmpty ? "Sheet" : session.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    if editor.hasUnsavedChanges { ProgressView() }
+                    switch session.saveState {
+                    case .saving, .unsaved: ProgressView()
+                    case .failed: Image(systemName: "exclamationmark.icloud").foregroundColor(.red)
+                    case .saved: EmptyView()
+                    }
                     Menu {
                         Button("Fill in a sample") {
-                            Task {
-                                try? await editor.setCells([
-                                    "A1": "Item", "B1": "Cost",
-                                    "A2": "Rent", "B2": "1200",
-                                    "A3": "Food", "B3": "450",
-                                    "A4": "Total", "B4": "=SUM(B2:B3)",
-                                ])
-                            }
+                            try? session.workbook?.set([
+                                SigmaAddress("A1")!: "Item", SigmaAddress("B1")!: "Cost",
+                                SigmaAddress("A2")!: "Rent", SigmaAddress("B2")!: "1200",
+                                SigmaAddress("A3")!: "Food", SigmaAddress("B3")!: "450",
+                                SigmaAddress("A4")!: "Total", SigmaAddress("B4")!: "=SUM(B2:B3)",
+                            ])
                         }
-                        Button("Export as Excel") { Task { shared = try? await editor.export(.xlsx) } }
-                        Button("Export as CSV") { Task { shared = try? await editor.export(.csv) } }
+                        Button("Export as Excel") { export(.xlsx) }
+                        Button("Export as CSV") { export(.csv) }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .disabled(editor.phase != .ready)
+                    .disabled(session.phase != .ready)
                 }
             }
             .sheet(item: $shared) { file in
                 if let sheet = try? SigmaShareSheet(file: file) { sheet }
             }
+            .task(id: session.phase == .ready) { await DemoTour.run(session: session, grid: grid) }
+    }
+
+    private func export(_ format: SigmaFormat) {
+        Task {
+            guard let book = session.workbook, let data = try? await book.export(format) else { return }
+            let name = (session.title.isEmpty ? "Sheet" : session.title) + "." + format.fileExtension
+            shared = SigmaFile(data: data, filename: name, format: format)
+        }
+    }
+}
+
+/// With SIGMA_DEMO_TOUR=1 the demo drives itself through the grid, for
+/// screenshots without a person at the Simulator.
+enum DemoTour {
+    @MainActor
+    static func run(session: SigmaSession, grid: SigmaGridController) async {
+        guard ProcessInfo.processInfo.environment["SIGMA_DEMO_TOUR"] == "1", session.phase == .ready,
+              let book = session.workbook else { return }
+        func pause(_ s: Double) async { try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
+        // SIGMA_DEMO_SHOTS=<folder> saves a picture of the screen at each step.
+        func step(_ name: String) {
+            print("TOUR", name)
+            guard let dir = ProcessInfo.processInfo.environment["SIGMA_DEMO_SHOTS"],
+                  let window = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            try? image.pngData()?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("tour-\(name).png"))
+        }
+        await pause(1.5)
+        step("opened")
+        grid.select(SigmaSelection(SigmaAddress("B4")!))
+        await pause(1.0)
+        step("selected")
+        grid.beginEditing(with: "=SUM(B2:B3)*2")
+        await pause(2.0)
+        step("editing")
+        grid.commit()
+        await pause(1.5)
+        step("committed")
+        grid.select(SigmaSelection(active: SigmaAddress("A1")!, corner: SigmaAddress("B3")!))
+        try? book.applyStyle(SigmaStyle(bold: true, fill: "#fde68a"), from: SigmaAddress("A1")!, to: SigmaAddress("B1")!)
+        try? book.freeze(rows: 1, columns: 1)
+        await pause(1.5)
+        step("range-frozen")
+        grid.select(SigmaSelection(SigmaAddress("H40")!))
+        await pause(2.0)
+        step("scrolled")
     }
 }

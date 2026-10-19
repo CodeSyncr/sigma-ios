@@ -1,12 +1,16 @@
 # Nimbus Sigma for iOS
 
-The [Sigma](https://nimbusgo.space/cloud/docs/sigma) spreadsheet editor inside your iOS app. Upload a spreadsheet to Nimbus Cloud from your server, open it in the app, and people edit it with formulas, formatting, charts and several sheets. Every change saves back as they type, and your server downloads the edited `.xlsx` or CSV whenever it likes.
+A native spreadsheet editor for your iOS app, backed by [Sigma](https://nimbusgo.space/cloud/docs/sigma) on Nimbus Cloud. Upload a spreadsheet from your server, open it in the app, and people edit it with formulas, formatting, charts, several sheets and Vani AI. Every change saves back as they type, and your server downloads the edited `.xlsx` or CSV whenever it likes.
 
-**Requirements:** iOS 15 / macOS 12 / visionOS 1, Xcode 15.3+ (Swift 5.10).
+It is native throughout: a UIKit grid, a SwiftUI format bar, Swift Charts. The formulas are Sigma's own engine, the same code the web editor runs, executed in JavaScriptCore, so a sheet computes the same on an iPhone as on the web. There is no web view.
+
+The engine is not in this package. Each session downloads it from Sigma for a sheet opened through the API, checks it, and keeps it in memory only, so the editor works only with a Nimbus Cloud account and a Sigma API key.
+
+**Requirements:** iOS 16 / visionOS 1, Xcode 15.3+ (Swift 5.10). The client and engine also build for macOS 13 (for server-side Swift and tests); the editor views are iOS.
 
 ## Install
 
-Swift Package Manager — in Xcode, **File › Add Package Dependencies…** and enter:
+Swift Package Manager: in Xcode, **File › Add Package Dependencies…** and enter:
 
 ```
 https://github.com/CodeSyncr/sigma-ios.git
@@ -16,7 +20,7 @@ or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/CodeSyncr/sigma-ios.git", from: "1.0.0"),
+    .package(url: "https://github.com/CodeSyncr/sigma-ios.git", from: "2.1.0"),
 ],
 targets: [
     .target(name: "App", dependencies: [.product(name: "NimbusSigma", package: "sigma-ios")]),
@@ -26,7 +30,7 @@ targets: [
 CocoaPods:
 
 ```ruby
-pod 'NimbusSigma', :git => 'https://github.com/CodeSyncr/sigma-ios.git', :tag => '1.0.0'
+pod 'NimbusSigma', :git => 'https://github.com/CodeSyncr/sigma-ios.git', :tag => '2.1.0'
 ```
 
 ## How it fits together
@@ -34,12 +38,14 @@ pod 'NimbusSigma', :git => 'https://github.com/CodeSyncr/sigma-ios.git', :tag =>
 ```
 your server ──(sgm_ key)──▶ Nimbus Cloud     upload sheets, mint signed links, download edits
      │
-     └──(signed link)──▶ your app ──▶ SigmaEditor     edits save straight back to the document
+     └──(signed link)──▶ your app ──▶ SigmaSession ──▶ SigmaSheetView     edits save straight back
 ```
+
+**Billing.** Sigma's API counts each time a sheet is opened in an editor (in your app or embedded on the web), not uploads; your plan includes an allowance each month. Test keys (`sgm_test_`) are for building: their opens are capped and their sheets are deleted after a week, and the editor shows "Test mode".
 
 **Keep the `sgm_` key on your server.** A key compiled into an app can be extracted, and it can read and delete every document on your account. The app only ever needs a link, which expires (fifteen minutes by default; one minute to seven days). Once a link opens a sheet, the editing session lasts eight hours.
 
-On your server (any language — here, the REST API):
+On your server (any language; here, the REST API):
 
 ```bash
 # Upload, or create a blank sheet with {"title": "Budget", "blank": "xlsx"}
@@ -61,19 +67,16 @@ curl "https://nimbusgo.space/api/v1/sigma/documents/42/content" \
 import NimbusSigma
 
 struct SheetScreen: View {
-    @StateObject private var editor: SigmaEditor
+    @StateObject private var session: SigmaSession
 
     init(sheetID: Int) {
         // Asked for a link when the sheet opens, and again whenever one expires.
-        _editor = StateObject(wrappedValue: SigmaEditor { try await MyAPI.sheetLink(id: sheetID) })
+        _session = StateObject(wrappedValue: SigmaSession { try await MyAPI.sheetLink(id: sheetID) })
     }
 
     var body: some View {
-        SigmaEditorView(editor: editor)
-            .navigationTitle(editor.title)
-            .toolbar {
-                if editor.hasUnsavedChanges { ProgressView() }
-            }
+        SigmaSheetView(session: session)
+            .navigationTitle(session.title)
     }
 }
 ```
@@ -81,57 +84,51 @@ struct SheetScreen: View {
 UIKit:
 
 ```swift
-let editor = SigmaEditor(link: url) { try await MyAPI.sheetLink(id: 42) }
-navigationController?.pushViewController(SigmaEditorViewController(editor: editor), animated: true)
+let session = SigmaSession { try await MyAPI.sheetLink(id: 42) }
+navigationController?.pushViewController(SigmaSheetViewController(session: session), animated: true)
 ```
 
-### What the editor tells you
+### What people get
+
+- **The grid:** smooth scrolling, sticky headers, frozen rows and columns, tap to select, round handles to stretch a selection, tap again to type, a formula bar, a row of formula keys above the keyboard, column resizing, a long-press menu (cut, copy, paste, fill, insert and delete rows and columns, sort, notes, freeze), sheet tabs, undo and redo. iPad keyboards get arrows, Tab, Return and ⌘C/X/V/Z/A/D/R/B/I/U/F.
+- **Formatting:** bold, italic, underline, strikethrough, text and fill colours, alignment, number formats, decimals, text size, borders.
+- **Data:** find and replace, sort (a header row stays put), conditional formatting, notes.
+- **Charts:** column, bar, line, area, scatter, pie and doughnut, drawn with Swift Charts and bound to their cells. Move, resize, restyle, delete.
+- **Vani AI**, when your Nimbus Cloud account is on Pro: people ask, and apply the change it proposes as one undo step. Its use counts against your plan.
+- **Share:** the sheet as Excel or CSV through the system share sheet.
+
+### The session
 
 | Published | Meaning |
 |---|---|
 | `phase` | `.loading`, `.ready`, or `.failed(SigmaError)` |
 | `document` | id, title, file name, format (`.xlsx`/`.csv`) and mode (`.edit`/`.view`) |
-| `title` | the sheet's name, as the person renames it |
-| `hasUnsavedChanges` | true from a change until it is saved (about a second later) |
-| `lastSaved`, `lastError` | the last save, and the last failure while open |
-
-`onEvent` delivers every event (`ready`, `changed`, `saved`, `titleChanged`, `error`) for apps that want them all.
-
-### Commands
+| `title` | the sheet's name; set it to rename |
+| `saveState` | `.saved`, `.unsaved`, `.saving`, or `.failed` |
+| `workbook` | the open `SigmaWorkbook` |
+| `aiAvailable` | whether Vani AI is offered |
 
 ```swift
-try await editor.save()                          // save now (throws for a view link)
-let file = try await editor.export(.xlsx)        // SigmaFile: data + filename
-try await editor.setCells(["A1": "Rent", "B1": "1200", "B3": "=SUM(B1:B2)"])
-let rows = try await editor.values("A1:B3")      // [[SigmaValue]], formulas computed
-try await editor.undo()
+try await session.save()                        // save now, without waiting
+let file = try await session.export(.xlsx)      // SigmaFile: data + filename
 ```
 
-Share an export with the system share sheet:
+When a link has expired or been revoked, the session asks your closure for a fresh one. If the editing session ends while someone is working, it gets a fresh link and saves again; nothing typed is lost.
+
+### Driving the sheet from code
+
+`SigmaWorkbook` is the open sheet in Sigma's engine:
 
 ```swift
-.sheet(item: $file) { file in
-    if let sheet = try? SigmaShareSheet(file: file) { sheet }
-}
+let book = session.workbook!
+try book.set([SigmaAddress("A1")!: "Rent", SigmaAddress("B1")!: "1200", SigmaAddress("B3")!: "=SUM(B1:B2)"])
+book.value(at: SigmaAddress("B3")!)              // .number(1200)
+try book.applyStyle(SigmaStyle(bold: true, fill: "#fff2cc"), from: SigmaAddress("A1")!, to: SigmaAddress("B1")!)
+try book.addChart(.column, data: "A1:B2")
+book.undo()
 ```
 
-Let people pick a spreadsheet to upload (through your server):
-
-```swift
-.fileImporter(isPresented: $picking, allowedContentTypes: SigmaContentTypes.all) { result in
-    if case let .success(url) = result, let (data, name) = try? SigmaContentTypes.read(url) {
-        Task { try await MyAPI.uploadSheet(data, filename: name) }
-    }
-}
-```
-
-### Expired links
-
-When a link has expired or been revoked, or an editing session ends, the editor calls your `refreshLink` closure once and opens the sheet again. Saved work is never lost: changes are in the document. Without a closure the editor fails with `SigmaError.linkExpired`.
-
-### Vani AI
-
-If your Nimbus Cloud account is on Pro, people get Vani AI in the sheet (building sheets, formulas, charts). Its use counts against your plan. On other plans it does not appear.
+Pass a `SigmaGridController` to `SigmaSheetView` to read the selection or drive the grid (select, format, sort, insert a chart, open a panel) from your own controls.
 
 ## Server-side Swift
 
@@ -146,7 +143,7 @@ let edited = try await sigma.content(of: doc.id)
 
 ## Example
 
-[`Examples/SigmaDemo`](Examples/SigmaDemo) is a small app: list your sheets, create or upload one, edit it, fill in a sample, and export.
+[`Examples/SigmaDemo`](Examples/SigmaDemo) is a small app: list your sheets, create or upload one, edit it, export it.
 
 1. Open `Examples/SigmaDemo/SigmaDemo.xcodeproj` and run it on a simulator or your phone (pick your team under Signing for a phone).
 2. Tap the gear and enter your Nimbus Cloud address and a Sigma key (`sgm_test_…` from Nimbus Cloud › API & CLI Keys). In the Simulator, `http://localhost:3333` is a cloud running on your Mac.
@@ -159,11 +156,9 @@ If Xcode says **"iOS 26.2 is not installed"**, it cannot build for iOS until you
 SIGMA_CLOUD=http://localhost:3333 SIGMA_KEY=sgm_test_… Examples/SigmaDemo/run-in-simulator.sh
 ```
 
-`project.yml` regenerates the project with [XcodeGen](https://github.com/yonaskolb/XcodeGen) if you change it.
-
 ## Tests
 
-`swift test` runs the unit tests. To open a real sheet in a real `WKWebView` against a running cloud:
+`swift test` runs the unit tests. The engine tests need Sigma's engine build (`SIGMA_ENGINE_JS=/path/to/sigma-core.js`) and skip without it. To open real sheets against a running cloud:
 
 ```bash
 SIGMA_E2E_CLOUD=http://localhost:3333 SIGMA_E2E_KEY=sgm_test_… swift test
@@ -171,4 +166,4 @@ SIGMA_E2E_CLOUD=http://localhost:3333 SIGMA_E2E_KEY=sgm_test_… swift test
 
 ## License
 
-MIT
+Proprietary. The SDK may be used only with Nimbus Cloud's Sigma API under your Nimbus Cloud account; see [LICENSE](LICENSE).

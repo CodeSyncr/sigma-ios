@@ -180,6 +180,8 @@ public enum SigmaError: Error, Sendable, Equatable, LocalizedError {
     case editor(String)
     /// The editor is not ready for commands yet.
     case notReady
+    /// Sigma's spreadsheet engine refused or failed.
+    case engine(String)
     /// Any other answer from the server.
     case server(status: Int, message: String)
     /// The request did not reach the server.
@@ -188,12 +190,27 @@ public enum SigmaError: Error, Sendable, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case let .unauthorized(m), let .quotaExceeded(m), let .notFound(m), let .linkExpired(m),
-             let .linkInvalid(m), let .editor(m), let .network(m):
+             let .linkInvalid(m), let .editor(m), let .network(m), let .engine(m):
             return m
         case .notReady:
             return "The sheet is still opening."
         case let .server(status, m):
             return m.isEmpty ? "Nimbus Cloud answered \(status)." : m
+        }
+    }
+}
+
+extension SigmaError {
+    /// The error an HTTP status from Nimbus Cloud or Sigma means.
+    public static func from(status: Int, message: String) -> SigmaError {
+        switch status {
+        case 401: return .unauthorized(message)
+        case 402: return .quotaExceeded(message)
+        case 404: return .notFound(message)
+        case 410: return .linkExpired(message)
+        case 403: return .linkInvalid(message)
+        case 0: return .network(message)
+        default: return .server(status: status, message: message)
         }
     }
 }

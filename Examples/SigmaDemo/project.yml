@@ -4,7 +4,7 @@ name: SigmaDemo
 options:
   bundleIdPrefix: space.nimbusgo
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
 packages:
   NimbusSigma:
     path: ../..

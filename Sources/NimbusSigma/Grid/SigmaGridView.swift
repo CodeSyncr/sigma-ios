@@ -112,6 +112,23 @@ public final class SigmaGridController: ObservableObject {
         }
     }
 
+    // MARK: Rows, columns, fill and paste, for menus of your own
+
+    public func insertRows(above: Bool) { grid?.perform(above ? .insertRowAbove : .insertRowBelow) }
+    public func deleteRows() { grid?.perform(.deleteRows) }
+    public func insertColumns(left: Bool) { grid?.perform(left ? .insertColumnLeft : .insertColumnRight) }
+    public func deleteColumns() { grid?.perform(.deleteColumns) }
+    public func fillDown() { grid?.perform(.fillDown) }
+    public func fillRight() { grid?.perform(.fillRight) }
+    /// Turns the corner handle into a fill handle: drag it to fill.
+    public func startFill() { grid?.perform(.fill) }
+    /// Pastes the values last copied in this sheet, without formulas or formatting.
+    public func pasteValues() { grid?.perform(.pasteValues) }
+    /// Whether there is a copy of Sigma's own to paste values from.
+    public var canPasteValues: Bool { grid?.hasClip ?? false }
+    /// The frozen rows and columns of the sheet on screen.
+    public var frozen: (rows: Int, columns: Int) { (grid?.geometry.frozenRows ?? 0, grid?.geometry.frozenColumns ?? 0) }
+
     /// Freezes rows above and columns left of a point; (0, 0) unfreezes.
     public func freeze(rows: Int, columns: Int) {
         guard let book = workbook, !readOnly else { return }
@@ -212,6 +229,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     )
     private var editing: SigmaAddress?
     private var clip: SigmaWorkbook.Clip?
+    var hasClip: Bool { clip != nil }
     private lazy var editMenu = UIEditMenuInteraction(delegate: self)
 
     init(controller: SigmaGridController) {

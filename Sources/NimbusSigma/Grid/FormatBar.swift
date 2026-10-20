@@ -32,6 +32,15 @@ struct FormatBar: View {
     private var s: SigmaStyle { controller.activeStyle }
 
     var body: some View {
+        HStack(spacing: 0) {
+            bar
+            // Pinned, so sheet commands never scroll out of reach.
+            Rectangle().fill(Color(uiColor: .separator)).frame(width: 1, height: 28)
+            MoreMenu(controller: controller)
+        }
+    }
+
+    private var bar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
                 if controller.aiAvailable {
@@ -201,6 +210,58 @@ struct FormatBar: View {
         case .currency: return "₹"
         case .text: return "Aa"
         }
+    }
+}
+
+/// Sheet commands in one place, always on the format bar: freeze, rows,
+/// columns, fill, sort, paste values and notes.
+struct MoreMenu: View {
+    @ObservedObject var controller: SigmaGridController
+
+    var body: some View {
+        Menu {
+            let f = controller.frozen
+            Menu {
+                Button("1 Row") { controller.freeze(rows: 1, columns: f.columns) }
+                Button("2 Rows") { controller.freeze(rows: 2, columns: f.columns) }
+                Button("1 Column") { controller.freeze(rows: f.rows, columns: 1) }
+                Button("Up to \(controller.selection.active.description)") {
+                    controller.freeze(rows: controller.selection.active.row + 1, columns: controller.selection.active.column + 1)
+                }
+                if f.rows > 0 || f.columns > 0 {
+                    Button("No Frozen Panes", role: .destructive) { controller.freeze(rows: 0, columns: 0) }
+                }
+            } label: { Label("Freeze", systemImage: "snowflake") }
+            Menu {
+                Button { controller.insertRows(above: true) } label: { Label("Insert Above", systemImage: "arrow.up.to.line.compact") }
+                Button { controller.insertRows(above: false) } label: { Label("Insert Below", systemImage: "arrow.down.to.line.compact") }
+                Button(role: .destructive) { controller.deleteRows() } label: { Label("Delete", systemImage: "trash") }
+            } label: { Label("Rows", systemImage: "rectangle.split.1x2") }
+            Menu {
+                Button { controller.insertColumns(left: true) } label: { Label("Insert Left", systemImage: "arrow.left.to.line.compact") }
+                Button { controller.insertColumns(left: false) } label: { Label("Insert Right", systemImage: "arrow.right.to.line.compact") }
+                Button(role: .destructive) { controller.deleteColumns() } label: { Label("Delete", systemImage: "trash") }
+            } label: { Label("Columns", systemImage: "rectangle.split.2x1") }
+            Menu {
+                Button { controller.startFill() } label: { Label("Drag to Fill…", systemImage: "square.and.arrow.down.on.square") }
+                Button { controller.fillDown() } label: { Label("Fill Down", systemImage: "arrow.down.to.line") }
+                Button { controller.fillRight() } label: { Label("Fill Right", systemImage: "arrow.right.to.line") }
+            } label: { Label("Fill", systemImage: "square.and.pencil") }
+            Menu {
+                Button { controller.sort(ascending: true) } label: { Label("Sort A → Z", systemImage: "arrow.up") }
+                Button { controller.sort(ascending: false) } label: { Label("Sort Z → A", systemImage: "arrow.down") }
+            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+            Divider()
+            Button { controller.pasteValues() } label: { Label("Paste Values Only", systemImage: "doc.on.clipboard") }
+                .disabled(!controller.canPasteValues)
+            Button { controller.panel = .note } label: { Label(controller.activeNote.isEmpty ? "Add Note" : "Edit Note", systemImage: "note.text") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .frame(width: 44, height: 44)
+        }
+        .accessibilityLabel("More")
     }
 }
 

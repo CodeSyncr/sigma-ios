@@ -8,6 +8,7 @@
 - **Row heights:** drag the edge between row numbers.
 - **Freeze presets:** 1 row, 2 rows, 1 column, or up to the selected cell (which now freezes through that cell, as on the web and Android).
 - **Clear formatting**, **AutoSum**, and **Paste Values Only** (`SigmaWorkbook.pasteValues`).
+- A **⋯ More** button pinned at the end of the format bar: Freeze, Rows, Columns, Fill, Sort, Paste Values Only and Note, always one tap away.
 - **Sheet tabs:** duplicate, and move left or right (`duplicateSheet`, `moveSheet(from:to:)`).
 - The cell menu is shorter: Fill and Freeze are submenus; conditional formatting and charts stay on the format bar.
 - Fixed: selection handles showed over a frozen pane once their cell had scrolled under it.

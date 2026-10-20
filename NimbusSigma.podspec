@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name         = "NimbusSigma"
-  s.version      = "2.1.0"
+  s.version      = "2.1.1"
   s.summary      = "Sigma spreadsheets from Nimbus Cloud, edited natively inside your iOS app."
   s.description  = <<-DESC
     A native spreadsheet editor for iOS: Sigma's own engine (formulas, formats, charts) running

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.0 (unreleased)
+
+- **Formula help:** typing a function name offers the functions it could be, above the keyboard; inside a call, the syntax shows with the current argument highlighted. **Insert Function** (the ƒx key and button) lists every function by category, searchable. The list comes from Sigma's engine, so it is always what Sigma computes. `SigmaWorkbook.functions()` returns it; `FormulaHint` reads a formula as typed.
+- **Pinch to zoom**, 50% to 200% (⌘+ / ⌘− / ⌘0 on an iPad keyboard).
+- **Fill by dragging:** Fill › Drag to Fill turns the corner handle into a fill handle; series continue and formulas shift.
+- **Row heights:** drag the edge between row numbers.
+- **Freeze presets:** 1 row, 2 rows, 1 column, or up to the selected cell (which now freezes through that cell, as on the web and Android).
+- **Clear formatting**, **AutoSum**, and **Paste Values Only** (`SigmaWorkbook.pasteValues`).
+- **Sheet tabs:** duplicate, and move left or right (`duplicateSheet`, `moveSheet(from:to:)`).
+- The cell menu is shorter: Fill and Freeze are submenus; conditional formatting and charts stay on the format bar.
+- Fixed: selection handles showed over a frozen pane once their cell had scrolled under it.
+- Needs a Sigma server with the engine of October 2026 or later (for the function list, duplicate, move and paste values).
+
 ## 2.1.0
 
 The first public release of the native editor (2.0.0 was withdrawn on the day it was published).

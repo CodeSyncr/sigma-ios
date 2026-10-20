@@ -20,7 +20,7 @@ public final class SigmaGridController: ObservableObject {
 
     /// A panel the sheet view shows over the grid.
     public enum Panel: String, Identifiable, Sendable {
-        case find, conditionalFormatting, note, chart, ai
+        case find, conditionalFormatting, note, chart, ai, functions
         public var id: String { rawValue }
     }
     @Published public var panel: Panel?
@@ -74,6 +74,51 @@ public final class SigmaGridController: ObservableObject {
         try? book.applyBorders(kind, from: selection.topLeft, to: selection.bottomRight)
     }
 
+    /// Removes every style from the selection: fonts, colours, alignment, number formats and borders.
+    public func clearFormatting() {
+        var p: [String: Any] = [:]
+        for k in ["b", "i", "u", "st", "al", "fs", "tc", "bg", "nf", "dp", "bT", "bB", "bL", "bR"] { p[k] = "" }
+        patch(p)
+    }
+
+    /// Sums the numbers just above the active cell into it, or starts a SUM to finish.
+    public func autoSum() {
+        guard let book = workbook, !readOnly else { return }
+        finishEdit()
+        let a = selection.active
+        var top = a.row - 1
+        while top >= 0 {
+            if case .number = book.value(at: SigmaAddress(row: top, column: a.column)) { top -= 1 } else { break }
+        }
+        top += 1
+        if top < a.row {
+            try? book.set("=SUM(\(SigmaAddress(row: top, column: a.column)):\(SigmaAddress(row: a.row - 1, column: a.column)))", at: a)
+            grid?.refreshAfterCommand()
+        } else {
+            grid?.beginEditing(initial: "=SUM(")
+        }
+    }
+
+    /// Puts a function into the formula being typed, or starts one in the active cell.
+    public func insertFunction(_ name: String) {
+        guard !readOnly else { return }
+        if isEditing {
+            let text = editText
+            let partial = FormulaHint.trailingName(text, standalone: true) ?? ""
+            grid?.setEditorText(String(text.dropLast(partial.count)) + name + "(")
+            grid?.focusEditorSoon()
+        } else {
+            grid?.beginEditing(initial: "=\(name)(")
+        }
+    }
+
+    /// Freezes rows above and columns left of a point; (0, 0) unfreezes.
+    public func freeze(rows: Int, columns: Int) {
+        guard let book = workbook, !readOnly else { return }
+        finishEdit()
+        try? book.freeze(rows: rows, columns: columns)
+    }
+
     /// Saves an edit in progress without moving, so formatting lands on the cell being edited.
     private func finishEdit() { if isEditing { grid?.commitEditing(move: .none) } }
 
@@ -119,7 +164,7 @@ public final class SigmaGridController: ObservableObject {
 @MainActor
 final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelegate, @preconcurrency UIEditMenuInteractionDelegate, UIGestureRecognizerDelegate {
     enum Move { case down, up, right, left, none }
-    enum Action { case undo, redo, cut, copy, paste, clear, fillDown, fillRight, insertRowAbove, insertRowBelow, deleteRows, insertColumnLeft, insertColumnRight, deleteColumns, edit, freezeHere, unfreeze, sortAscending, sortDescending, note, conditionalFormatting, find }
+    enum Action { case undo, redo, cut, copy, paste, pasteValues, clear, fill, fillDown, fillRight, insertRowAbove, insertRowBelow, deleteRows, insertColumnLeft, insertColumnRight, deleteColumns, edit, freezeHere, freezeOneRow, freezeTwoRows, freezeOneColumn, unfreeze, sortAscending, sortDescending, note, conditionalFormatting, find }
 
     let controller: SigmaGridController
     private(set) var workbook: SigmaWorkbook?
@@ -129,6 +174,13 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     private var geometryKey: (revision: Int, sheet: Int)?
     /// Column widths being dragged, before they are saved.
     private var liveColumnWidth: (column: Int, width: CGFloat)?
+    /// A row height being dragged, before it is saved.
+    private var liveRowHeight: (row: Int, height: CGFloat)?
+    /// Pinch zoom, 50% to 200%: cells, headers, text and charts scale with it.
+    private(set) var zoom: CGFloat = 1
+    /// Fill mode: the corner handle drags out a fill instead of the selection.
+    private var filling = false
+    private var fillTarget: SigmaSelection?
 
     // Panes: the scrolling body and the frozen top, left and corner.
     private let body = Pane(), top = Pane(), left = Pane(), corner = Pane()
@@ -154,6 +206,10 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     func commitIfEditing() { if editing != nil { commitEditing(move: .none) } }
 
     private let editor = CellEditor()
+    private lazy var accessory = FormulaKeys(
+        insert: { [weak self] text in self?.insertIntoEditor(text) },
+        functions: { [weak self] in self?.controller.panel = .functions }
+    )
     private var editing: SigmaAddress?
     private var clip: SigmaWorkbook.Clip?
     private lazy var editMenu = UIEditMenuInteraction(delegate: self)
@@ -186,7 +242,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         editor.delegate = self
         editor.addTarget(self, action: #selector(editorChanged), for: .editingChanged)
         editor.onKey = { [weak self] move in self?.commitEditing(move: move) }
-        editor.inputAccessoryView = FormulaKeys { [weak self] text in self?.insertIntoEditor(text) }
+        editor.inputAccessoryView = accessory
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
         tap.delegate = self
@@ -198,6 +254,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         resize.delegate = self
         addGestureRecognizer(resize)
         panGestureRecognizer.require(toFail: resize)
+        addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
         addInteraction(editMenu)
     }
 
@@ -232,17 +289,22 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     private func refreshGeometry() {
         guard let book = workbook else { return }
         let key = (book.revision, book.activeSheet)
-        if let k = geometryKey, k == key, liveColumnWidth == nil { return }
+        if let k = geometryKey, k == key, liveColumnWidth == nil, liveRowHeight == nil { return }
         geometryKey = key
         let info = book.sheets.indices.contains(book.activeSheet) ? book.sheets[book.activeSheet] : nil
         let layout = book.layout()
         let live = liveColumnWidth
-        geometry = GridGeometry(
+        let liveRow = liveRowHeight
+        let z = zoom
+        var g = GridGeometry(
             rows: info?.rows ?? 1000, columns: info?.columns ?? 104,
             frozenRows: info?.frozenRows ?? 0, frozenColumns: info?.frozenColumns ?? 0,
-            columnWidth: { c in live?.column == c ? live!.width : CGFloat(layout?.width(ofColumn: c) ?? 96) },
-            rowHeight: { r in CGFloat(layout?.height(ofRow: r) ?? 26) }
+            columnWidth: { c in live?.column == c ? live!.width : CGFloat(layout?.width(ofColumn: c) ?? 96) * z },
+            rowHeight: { r in liveRow?.row == r ? liveRow!.height : CGFloat(layout?.height(ofRow: r) ?? 26) * z }
         )
+        g.rowHeaderWidth = 46 * z
+        g.columnHeaderHeight = 28 * z
+        geometry = g
         let size = geometry.contentSize
         if contentSize != size { contentSize = CGSize(width: size.width, height: size.height + 80) }
     }
@@ -345,7 +407,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
                 let frame = geometry.rect(row: r, column: c)
                 if view.frame != frame { view.frame = frame }
                 if let cell = cache[k] {
-                    view.content = .init(text: cell.text, isNumber: cell.isNumber, isError: cell.isError, style: cell.style, hasNote: cell.hasNote)
+                    view.content = .init(text: cell.text, isNumber: cell.isNumber, isError: cell.isError, style: cell.style, hasNote: cell.hasNote, zoom: zoom)
                 } else {
                     view.content = .init()
                 }
@@ -369,6 +431,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
                 pane.views[i] = v
                 return v
             }()
+            view.zoom = zoom
             if columns != nil {
                 view.frame = CGRect(x: geometry.rect(row: 0, column: i).minX, y: 0, width: geometry.width(ofColumn: i), height: geometry.columnHeaderHeight)
                 view.title = SigmaAddress.columnName(i)
@@ -441,9 +504,25 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         let off = contentOffset
         let tl = g.screenRect(row: s.top, column: s.left, offset: off)
         let br = g.screenRect(row: s.bottom, column: s.right, offset: off)
-        overlay.place(topLeft: CGPoint(x: tl.minX, y: tl.minY), bottomRight: CGPoint(x: br.maxX, y: br.maxY),
-                      visible: editing == nil && !controller.readOnly,
+        let shown = editing == nil && !controller.readOnly
+        // A handle on a scrolling cell hides once that cell has scrolled under a frozen pane.
+        func visible(_ row: Int, _ column: Int, _ p: CGPoint) -> Bool {
+            if row >= g.frozenRows && p.y < g.columnHeaderHeight + g.frozenHeight - 2 { return false }
+            if column >= g.frozenColumns && p.x < g.rowHeaderWidth + g.frozenWidth - 2 { return false }
+            return true
+        }
+        let tlPoint = CGPoint(x: tl.minX, y: tl.minY), brPoint = CGPoint(x: br.maxX, y: br.maxY)
+        overlay.place(topLeft: tlPoint, bottomRight: brPoint,
+                      topLeftVisible: shown && !filling && visible(s.top, s.left, tlPoint),
+                      bottomRightVisible: shown && visible(s.bottom, s.right, brPoint),
+                      filling: filling,
                       clip: CGRect(x: g.rowHeaderWidth - 12, y: g.columnHeaderHeight - 12, width: bounds.width, height: bounds.height))
+        if let t = fillTarget {
+            let a = g.screenRect(row: t.top, column: t.left, offset: off), b = g.screenRect(row: t.bottom, column: t.right, offset: off)
+            overlay.showFill(a.union(b))
+        } else {
+            overlay.showFill(nil)
+        }
     }
 
     private func scrollToVisible(_ a: SigmaAddress) {
@@ -467,6 +546,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     }
 
     private func dragHandle(_ handle: HandleOverlay.Handle, to p: CGPoint, ended: Bool) {
+        if filling && handle == .bottomRight { return dragFill(to: p, ended: ended) }
         // Near an edge, the sheet scrolls under the finger.
         var off = contentOffset
         let edge: CGFloat = 36, step: CGFloat = 14
@@ -488,9 +568,92 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         if ended { showMenu(at: CGPoint(x: p.x + contentOffset.x, y: p.y + contentOffset.y)) }
     }
 
+    /// Fill mode: the target grows from the selection in the direction dragged furthest.
+    private func dragFill(to p: CGPoint, ended: Bool) {
+        let s = controller.selection
+        if case let .cell(r, c) = geometry.hit(CGPoint(x: max(p.x, geometry.rowHeaderWidth + 1), y: max(p.y, geometry.columnHeaderHeight + 1)), offset: contentOffset) {
+            let down = r > s.bottom ? r - s.bottom : r < s.top ? s.top - r : 0
+            let across = c > s.right ? c - s.right : c < s.left ? s.left - c : 0
+            if down == 0 && across == 0 {
+                fillTarget = nil
+            } else if down >= across {
+                fillTarget = SigmaSelection(active: SigmaAddress(row: min(s.top, r), column: s.left), corner: SigmaAddress(row: max(s.bottom, r), column: s.right))
+            } else {
+                fillTarget = SigmaSelection(active: SigmaAddress(row: s.top, column: min(s.left, c)), corner: SigmaAddress(row: s.bottom, column: max(s.right, c)))
+            }
+            setNeedsLayout()
+        }
+        guard ended else { return }
+        let target = fillTarget
+        fillTarget = nil
+        filling = false
+        if let book = workbook, let target {
+            do {
+                try book.fill(from: s, to: target)
+                controller.selection = SigmaSelection(active: target.topLeft, corner: target.bottomRight)
+                refreshActiveInput()
+            } catch {
+                flash(error)
+            }
+        }
+        setNeedsLayout()
+    }
+
+    // MARK: Zoom
+
+    @objc private func pinched(_ g: UIPinchGestureRecognizer) {
+        guard g.state == .changed || g.state == .ended else { return }
+        let p = g.location(in: self)
+        setZoom(zoom * g.scale, focus: CGPoint(x: p.x - contentOffset.x, y: p.y - contentOffset.y))
+        g.scale = 1
+    }
+
+    /// Zooms about a point in the viewport, keeping what is under it in place.
+    func setZoom(_ next: CGFloat, focus f: CGPoint) {
+        let old = zoom
+        let z = min(2, max(0.5, next))
+        guard abs(z - old) > 0.001 else { return }
+        let g = geometry
+        let sx = (contentOffset.x + f.x - g.rowHeaderWidth) / old
+        let sy = (contentOffset.y + f.y - g.columnHeaderHeight) / old
+        zoom = z
+        geometryKey = nil
+        refreshGeometry()
+        let ng = geometry
+        var off = CGPoint(x: sx * z - (f.x - ng.rowHeaderWidth), y: sy * z - (f.y - ng.columnHeaderHeight))
+        off.x = min(max(0, off.x), max(0, contentSize.width - bounds.width))
+        off.y = min(max(0, off.y), max(0, contentSize.height - bounds.height))
+        contentOffset = off
+        if editing != nil {
+            editor.font = gridFont(controller.activeStyle, zoom: zoom)
+            sizeEditor()
+        }
+        chartKey = nil
+        setNeedsLayout()
+    }
+
+    /// Redraws after a change made outside a gesture (AutoSum, a command).
+    func refreshAfterCommand() {
+        refreshActiveInput()
+        setNeedsLayout()
+    }
+
+    /// Gives the cell editor the keyboard again once a sheet has gone.
+    func focusEditorSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, self.editing != nil else { return }
+            self.editor.becomeFirstResponder()
+        }
+    }
+
     // MARK: Gestures
 
     @objc private func tapped(_ g: UITapGestureRecognizer) {
+        if filling {
+            filling = false
+            fillTarget = nil
+            setNeedsLayout()
+        }
         let p = g.location(in: self)
         let viewport = CGPoint(x: p.x - contentOffset.x, y: p.y - contentOffset.y)
         switch geometry.hit(viewport, offset: contentOffset) {
@@ -531,6 +694,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     }
 
     private var resizingColumn: (column: Int, startWidth: CGFloat)?
+    private var resizingRow: (row: Int, startHeight: CGFloat)?
     /// Where the finger first came down: a drag is only a resize if it started on an edge.
     private var touchDown: CGPoint?
 
@@ -538,14 +702,24 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         guard g !== panGestureRecognizer, g is UIPanGestureRecognizer, !(g.view is HandleOverlay) else {
             return super.gestureRecognizerShouldBegin(g)
         }
-        // Only a drag that starts on a column edge in the header resizes.
+        // Only a drag that starts on a column edge (or a row edge) in the headers resizes.
         let p = touchDown ?? g.location(in: self)
         let viewport = CGPoint(x: p.x - contentOffset.x, y: p.y - contentOffset.y)
-        guard viewport.y < geometry.columnHeaderHeight, viewport.x > geometry.rowHeaderWidth, !controller.readOnly else { return false }
+        guard !controller.readOnly else { return false }
+        if viewport.x < geometry.rowHeaderWidth, viewport.y > geometry.columnHeaderHeight {
+            let y = viewport.y - geometry.columnHeaderHeight
+            let sheetY = y < geometry.frozenHeight ? y : y + contentOffset.y
+            guard let r = geometry.rowEdge(nearY: sheetY, slop: 10) else { return false }
+            resizingRow = (r, geometry.height(ofRow: r))
+            resizingColumn = nil
+            return true
+        }
+        guard viewport.y < geometry.columnHeaderHeight, viewport.x > geometry.rowHeaderWidth else { return false }
         let x = viewport.x - geometry.rowHeaderWidth
         let sheetX = x < geometry.frozenWidth ? x : x + contentOffset.x
         guard let c = geometry.columnEdge(nearX: sheetX, slop: 14) else { return false }
         resizingColumn = (c, geometry.width(ofColumn: c))
+        resizingRow = nil
         return true
     }
 
@@ -557,8 +731,28 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     }
 
     @objc private func resizing(_ g: UIPanGestureRecognizer) {
+        if let rr = resizingRow {
+            let h = max(14 * zoom, rr.startHeight + g.translation(in: self).y)
+            switch g.state {
+            case .began: break
+            case .changed:
+                liveRowHeight = (rr.row, h)
+                geometryKey = nil
+                setNeedsLayout()
+            case .ended:
+                liveRowHeight = nil
+                resizingRow = nil
+                try? workbook?.setHeight(Double(h / zoom), ofRow: rr.row)
+            default:
+                liveRowHeight = nil
+                resizingRow = nil
+                geometryKey = nil
+                setNeedsLayout()
+            }
+            return
+        }
         guard let r = resizingColumn else { return }
-        let w = max(24, r.startWidth + g.translation(in: self).x)
+        let w = max(24 * zoom, r.startWidth + g.translation(in: self).x)
         switch g.state {
         case .began:
             break
@@ -569,7 +763,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         case .ended:
             liveColumnWidth = nil
             resizingColumn = nil
-            try? workbook?.setWidth(Double(w), ofColumn: r.column)
+            try? workbook?.setWidth(Double(w / zoom), ofColumn: r.column)
         default:
             liveColumnWidth = nil
             resizingColumn = nil
@@ -588,7 +782,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         let raw = initial ?? book.input(at: a)
         let pane = paneFor(a)
         let style = book.style(at: a)
-        editor.font = gridFont(style)
+        editor.font = gridFont(style, zoom: zoom)
         editor.textAlignment = .left
         editor.text = raw
         pane.addSubview(editor)
@@ -621,7 +815,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     private func sizeEditor() {
         guard let a = editing else { return }
         let rect = geometry.rect(row: a.row, column: a.column)
-        let textWidth = ((editor.text ?? "") as NSString).size(withAttributes: [.font: editor.font ?? gridFont(nil)]).width + 18
+        let textWidth = ((editor.text ?? "") as NSString).size(withAttributes: [.font: editor.font ?? gridFont(nil, zoom: zoom)]).width + 18
         let room = max(rect.width, bounds.width - geometry.rowHeaderWidth - 16)
         editor.frame = CGRect(x: rect.minX, y: rect.minY, width: min(max(rect.width, textWidth), room), height: rect.height)
     }
@@ -721,6 +915,14 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
                 if landed.rows > 0 && landed.columns > 0 {
                     controller.selection = SigmaSelection(active: s.topLeft, corner: SigmaAddress(row: s.top + landed.rows - 1, column: s.left + landed.columns - 1))
                 }
+            case .pasteValues:
+                guard let clip else { return }
+                let landed = try book.pasteValues(clip, at: s.topLeft)
+                if landed.rows > 0 && landed.columns > 0 {
+                    controller.selection = SigmaSelection(active: s.topLeft, corner: SigmaAddress(row: s.top + landed.rows - 1, column: s.left + landed.columns - 1))
+                }
+            case .fill:
+                filling = true
             case .clear: try book.clear(from: s.topLeft, to: s.bottomRight)
             case .fillDown:
                 try book.fill(from: SigmaSelection(active: s.topLeft, corner: SigmaAddress(row: s.top, column: s.right)), to: s)
@@ -733,7 +935,10 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
             case .insertColumnRight: try book.insertColumns(at: s.right + 1, count: s.right - s.left + 1)
             case .deleteColumns: try book.deleteColumns(at: s.left, count: s.right - s.left + 1)
             case .edit: beginEditing(initial: nil)
-            case .freezeHere: try book.freeze(rows: s.active.row, columns: s.active.column)
+            case .freezeHere: try book.freeze(rows: s.active.row + 1, columns: s.active.column + 1)
+            case .freezeOneRow: try book.freeze(rows: 1, columns: geometry.frozenColumns)
+            case .freezeTwoRows: try book.freeze(rows: 2, columns: geometry.frozenColumns)
+            case .freezeOneColumn: try book.freeze(rows: geometry.frozenRows, columns: 1)
             case .unfreeze: try book.freeze(rows: 0, columns: 0)
             case .sortAscending: controller.sort(ascending: true)
             case .sortDescending: controller.sort(ascending: false)
@@ -785,14 +990,18 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         if !ro {
             basics.insert(act("Cut", "scissors", .cut), at: 0)
             if UIPasteboard.general.hasStrings { basics.append(act("Paste", "doc.on.clipboard", .paste)) }
+            // Values only needs Sigma's own copy, which knows what the cells computed.
+            if clip != nil { basics.append(act("Paste Values Only", "doc.on.clipboard.fill", .pasteValues)) }
             basics.append(act("Clear", "eraser", .clear))
             if s.isSingle { basics.insert(act("Edit", "pencil", .edit), at: 0) }
         }
         guard !ro else { return UIMenu(children: basics) }
         var more: [UIMenuElement] = []
-        if !s.isSingle && !wholeRows && !wholeColumns {
-            if s.bottom > s.top { more.append(act("Fill Down", "arrow.down.to.line", .fillDown)) }
-            if s.right > s.left { more.append(act("Fill Right", "arrow.right.to.line", .fillRight)) }
+        if !wholeRows && !wholeColumns {
+            var fills = [act("Drag to Fill…", "square.and.arrow.down.on.square", .fill)]
+            if s.bottom > s.top { fills.append(act("Fill Down", "arrow.down.to.line", .fillDown)) }
+            if s.right > s.left { fills.append(act("Fill Right", "arrow.right.to.line", .fillRight)) }
+            more.append(UIMenu(title: "Fill", image: UIImage(systemName: "square.and.pencil"), children: fills))
         }
         let rowWord = s.bottom > s.top ? "Rows" : "Row"
         let colWord = s.right > s.left ? "Columns" : "Column"
@@ -812,10 +1021,11 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         if s.isSingle {
             more.append(act(controller.activeNote.isEmpty ? "Add Note" : "Edit Note", "note.text", .note))
         }
-        more.append(act("Conditional Formatting…", "paintpalette", .conditionalFormatting))
-        more.append(UIAction(title: "Insert Chart", image: UIImage(systemName: "chart.bar")) { [weak self] _ in self?.controller.insertChart() })
         let frozen = g.frozenRows > 0 || g.frozenColumns > 0
-        more.append(frozen ? act("Unfreeze", "snowflake", .unfreeze) : act("Freeze Up to Here", "snowflake", .freezeHere))
+        var freezes = [act("1 Row", nil, .freezeOneRow), act("2 Rows", nil, .freezeTwoRows), act("1 Column", nil, .freezeOneColumn),
+                       act("Up to \(s.active)", nil, .freezeHere)]
+        if frozen { freezes.append(act("No Frozen Panes", nil, .unfreeze)) }
+        more.append(UIMenu(title: "Freeze", image: UIImage(systemName: "snowflake"), children: freezes))
         return UIMenu(children: basics + more)
     }
 
@@ -846,6 +1056,8 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
             k("d", .command, "Fill Down", #selector(keyFillDown)), k("r", .command, "Fill Right", #selector(keyFillRight)),
             k("b", .command, "Bold", #selector(keyBold)), k("i", .command, "Italic", #selector(keyItalic)),
             k("u", .command, "Underline", #selector(keyUnderline)), k("f", .command, "Find", #selector(keyFind)),
+            k("=", .command, "Zoom In", #selector(keyZoomIn)), k("+", .command, nil, #selector(keyZoomIn)),
+            k("-", .command, "Zoom Out", #selector(keyZoomOut)), k("0", .command, "Actual Size", #selector(keyZoomReset)),
         ]
     }
 
@@ -860,6 +1072,9 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     @objc private func keyItalic() { controller.toggleItalic() }
     @objc private func keyUnderline() { controller.toggleUnderline() }
     @objc private func keyFind() { perform(.find) }
+    @objc private func keyZoomIn() { setZoom(zoom * 1.25, focus: CGPoint(x: bounds.width / 2, y: bounds.height / 2)) }
+    @objc private func keyZoomOut() { setZoom(zoom / 1.25, focus: CGPoint(x: bounds.width / 2, y: bounds.height / 2)) }
+    @objc private func keyZoomReset() { setZoom(1, focus: CGPoint(x: bounds.width / 2, y: bounds.height / 2)) }
     @objc private func keySelectAll() {
         select(SigmaSelection(active: SigmaAddress(row: 0, column: 0), corner: SigmaAddress(row: geometry.rows - 1, column: geometry.columns - 1)), scroll: false)
     }
@@ -978,6 +1193,11 @@ final class HandleOverlay: UIView {
         clipper.clipsToBounds = true
         clipper.isUserInteractionEnabled = true
         addSubview(clipper)
+        fillOutline.fillColor = UIColor.clear.cgColor
+        fillOutline.strokeColor = GridColors.accent.cgColor
+        fillOutline.lineWidth = 2
+        fillOutline.lineDashPattern = [6, 4]
+        layer.addSublayer(fillOutline)
         for (knob, which) in [(tl, Handle.topLeft), (br, Handle.bottomRight)] {
             clipper.addSubview(knob)
             let pan = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
@@ -989,12 +1209,23 @@ final class HandleOverlay: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func place(topLeft: CGPoint, bottomRight: CGPoint, visible: Bool, clip: CGRect) {
+    private let fillOutline = CAShapeLayer()
+
+    func place(topLeft: CGPoint, bottomRight: CGPoint, topLeftVisible: Bool, bottomRightVisible: Bool, filling: Bool, clip: CGRect) {
         clipper.frame = clip
-        tl.isHidden = !visible
-        br.isHidden = !visible
+        tl.isHidden = !topLeftVisible
+        br.isHidden = !bottomRightVisible
+        br.filling = filling
         tl.center = CGPoint(x: topLeft.x - clip.minX, y: topLeft.y - clip.minY)
         br.center = CGPoint(x: bottomRight.x - clip.minX, y: bottomRight.y - clip.minY)
+    }
+
+    /// The block a fill drag would reach, while it is dragged; nil hides it.
+    func showFill(_ rect: CGRect?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillOutline.path = rect.map { UIBezierPath(rect: $0).cgPath }
+        CATransaction.commit()
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -1011,6 +1242,17 @@ final class HandleOverlay: UIView {
 final class HandleKnob: UIView {
     var which: HandleOverlay.Handle = .bottomRight
     private let dot = UIView()
+    private let plus = UIImageView(image: UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .bold)))
+    /// The fill handle: a green square with a plus, so it reads differently from the round selection handles.
+    var filling = false {
+        didSet {
+            guard filling != oldValue else { return }
+            dot.layer.cornerRadius = filling ? 3 : 7
+            dot.backgroundColor = filling ? GridColors.accent : .white
+            dot.frame = filling ? CGRect(x: 13, y: 13, width: 18, height: 18) : CGRect(x: 15, y: 15, width: 14, height: 14)
+            plus.isHidden = !filling
+        }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
@@ -1022,6 +1264,12 @@ final class HandleKnob: UIView {
         dot.layer.borderColor = GridColors.accent.cgColor
         dot.isUserInteractionEnabled = false
         addSubview(dot)
+        plus.tintColor = .white
+        plus.contentMode = .center
+        plus.frame = CGRect(x: 13, y: 13, width: 18, height: 18)
+        plus.isHidden = true
+        plus.isUserInteractionEnabled = false
+        addSubview(plus)
     }
 
     @available(*, unavailable)
@@ -1069,19 +1317,22 @@ final class CellEditor: UITextField {
     @objc private func escape() { (superview?.superview as? SigmaGridView)?.cancelEditing() }
 }
 
-/// Keys a formula needs that the iPhone keyboard hides: above the keyboard while editing.
+/// Keys a formula needs that the iPhone keyboard hides, above it while
+/// editing, and ƒx for the function list. (Suggestions and argument hints
+/// show in the sheet view, just above this bar.)
 final class FormulaKeys: UIInputView {
-    init(insert: @escaping (String) -> Void) {
+    init(insert: @escaping (String) -> Void, functions: @escaping () -> Void) {
         super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 44), inputViewStyle: .keyboard)
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.distribution = .fillEqually
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        for key in ["=", "+", "−", "×", "÷", "(", ")", ":", ",", "Σ"] {
+        let keys = UIStackView()
+        keys.axis = .horizontal
+        keys.distribution = .fillEqually
+        keys.spacing = 5
+        keys.translatesAutoresizingMaskIntoConstraints = false
+        for key in ["=", "+", "−", "×", "÷", "(", ")", ":", ",", "Σ", "ƒx"] {
             let b = UIButton(type: .system)
             b.setTitle(key, for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 19, weight: .medium)
+            b.titleLabel?.font = .systemFont(ofSize: key == "ƒx" ? 16 : 19, weight: key == "ƒx" ? .bold : .medium)
+            if key == "ƒx" { b.tintColor = GridColors.accent; b.accessibilityLabel = "Insert function" }
             b.backgroundColor = UIColor.secondarySystemBackground
             b.layer.cornerRadius = 6
             let text: String
@@ -1094,16 +1345,16 @@ final class FormulaKeys: UIInputView {
             }
             b.addAction(UIAction { _ in
                 UIDevice.current.playInputClick()
-                insert(text)
+                if key == "ƒx" { functions() } else { insert(text) }
             }, for: .touchUpInside)
-            stack.addArrangedSubview(b)
+            keys.addArrangedSubview(b)
         }
-        addSubview(stack)
+        addSubview(keys)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 6),
-            stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -6),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            keys.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 6),
+            keys.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -6),
+            keys.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            keys.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
         ])
         allowsSelfSizing = true
     }
@@ -1112,6 +1363,27 @@ final class FormulaKeys: UIInputView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: 44) }
+
+    /// "SUMIF(range, **criterion**, [sum_range])  Adds the cells that meet a condition."
+    static func syntax(_ fn: SigmaFunction, argument: Int) -> NSAttributedString {
+        let args = FormulaHint.arguments(fn.syntax)
+        let mono = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let monoBold = UIFont.monospacedSystemFont(ofSize: 14, weight: .bold)
+        let out = NSMutableAttributedString(string: fn.name + "(", attributes: [.font: mono, .foregroundColor: GridColors.ink])
+        // Past the last argument, a repeating one ("[number2, …]") is still the current one.
+        let current = args.isEmpty ? -1 : min(argument, args.count - 1)
+        for (i, a) in args.enumerated() {
+            if i > 0 { out.append(NSAttributedString(string: ", ", attributes: [.font: mono, .foregroundColor: GridColors.ink])) }
+            out.append(NSAttributedString(string: a, attributes: i == current
+                ? [.font: monoBold, .foregroundColor: GridColors.accent]
+                : [.font: mono, .foregroundColor: GridColors.ink]))
+        }
+        out.append(NSAttributedString(string: ")", attributes: [.font: mono, .foregroundColor: GridColors.ink]))
+        if !fn.description.isEmpty {
+            out.append(NSAttributedString(string: "   " + fn.description, attributes: [.font: UIFont.systemFont(ofSize: 13), .foregroundColor: UIColor.secondaryLabel]))
+        }
+        return out
+    }
 }
 
 extension FormulaKeys: UIInputViewAudioFeedback {

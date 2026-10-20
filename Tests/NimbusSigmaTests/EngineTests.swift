@@ -18,6 +18,29 @@ final class EngineTests: XCTestCase {
         return e
     }
 
+    func testFunctionsSheetsAndPasteValues() throws {
+        let book = try SigmaWorkbook(engine: engine())
+        let fns = book.functions()
+        XCTAssertGreaterThanOrEqual(fns.count, 80)
+        XCTAssertEqual(fns.first { $0.name == "SUMIF" }?.syntax, "SUMIF(range, criterion, [sum_range])")
+
+        try book.set([SigmaAddress("A1")!: "2", SigmaAddress("A2")!: "=A1*21"])
+        try book.applyStyle(SigmaStyle(bold: true), from: SigmaAddress("C1")!, to: SigmaAddress("C1")!)
+        let clip = try book.copy(SigmaSelection(SigmaAddress("A2")!))
+        try book.pasteValues(clip, at: SigmaAddress("C1")!)
+        XCTAssertEqual(book.input(at: SigmaAddress("C1")!), "42")
+        XCTAssertEqual(book.style(at: SigmaAddress("C1")!).bold, true)
+
+        XCTAssertEqual(try book.duplicateSheet(0), 1)
+        XCTAssertEqual(book.sheets.map(\.name), ["Sheet1", "Sheet1 copy"])
+        XCTAssertEqual(book.activeSheet, 1)
+        XCTAssertEqual(book.value(at: SigmaAddress("A2")!, sheet: 1), .number(42))
+        try book.moveSheet(from: 1, to: 0)
+        XCTAssertEqual(book.sheets.map(\.name), ["Sheet1 copy", "Sheet1"])
+        XCTAssertTrue(book.undo())
+        XCTAssertEqual(book.sheets.map(\.name), ["Sheet1", "Sheet1 copy"])
+    }
+
     func testFormulasStylesAndUndo() throws {
         let book = try SigmaWorkbook(engine: engine())
         XCTAssertTrue(book.engineVersion.hasPrefix("sigma@"), book.engineVersion)

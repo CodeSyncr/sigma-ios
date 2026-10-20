@@ -93,7 +93,15 @@ struct FormatBar: View {
                     Button(role: .destructive) { controller.setBorders(.clear) } label: { Label("No borders", systemImage: "square.dashed") }
                 } label: { icon("squareshape.split.2x2") }
                 .accessibilityLabel("Borders")
+                Button { controller.clearFormatting() } label: { icon("eraser") }
+                    .accessibilityLabel("Clear formatting")
                 divider
+                Button { controller.autoSum() } label: { icon("sum") }
+                    .accessibilityLabel("AutoSum")
+                Button { controller.panel = .functions } label: {
+                    Text("ƒx").font(.system(size: 16, weight: .bold)).foregroundStyle(Color.primary).frame(width: 36, height: 36)
+                }
+                .accessibilityLabel("Insert function")
                 Menu {
                     Button { controller.sort(ascending: true) } label: { Label("Sort A → Z", systemImage: "arrow.up") }
                     Button { controller.sort(ascending: false) } label: { Label("Sort Z → A", systemImage: "arrow.down") }

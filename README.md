@@ -90,8 +90,9 @@ navigationController?.pushViewController(SigmaSheetViewController(session: sessi
 
 ### What people get
 
-- **The grid:** smooth scrolling, sticky headers, frozen rows and columns, tap to select, round handles to stretch a selection, tap again to type, a formula bar, a row of formula keys above the keyboard, column resizing, a long-press menu (cut, copy, paste, fill, insert and delete rows and columns, sort, notes, freeze), sheet tabs, undo and redo. iPad keyboards get arrows, Tab, Return and ⌘C/X/V/Z/A/D/R/B/I/U/F.
-- **Formatting:** bold, italic, underline, strikethrough, text and fill colours, alignment, number formats, decimals, text size, borders.
+- **The grid:** smooth scrolling, pinch to zoom, sticky headers, frozen rows and columns (with presets), tap to select, round handles to stretch a selection, drag to fill, tap again to type, a formula bar, a row of formula keys above the keyboard, column and row resizing, a long-press menu (cut, copy, paste, paste values only, fill, insert and delete rows and columns, sort, notes, freeze), sheet tabs (rename, duplicate, move, delete), undo and redo. iPad keyboards get arrows, Tab, Return, ⌘C/X/V/Z/A/D/R/B/I/U/F and ⌘+/−/0 to zoom.
+- **Formulas:** suggestions as you type a function name, the syntax of the function you are in with the current argument highlighted, and an Insert Function list by category; AutoSum.
+- **Formatting:** bold, italic, underline, strikethrough, text and fill colours, alignment, number formats, decimals, text size, borders, Clear formatting.
 - **Data:** find and replace, sort (a header row stays put), conditional formatting, notes.
 - **Charts:** column, bar, line, area, scatter, pie and doughnut, drawn with Swift Charts and bound to their cells. Move, resize, restyle, delete.
 - **Vani AI**, when your Nimbus Cloud account is on Pro: people ask, and apply the change it proposes as one undo step. Its use counts against your plan.

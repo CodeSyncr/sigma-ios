@@ -190,6 +190,24 @@ public struct SigmaConditionalRule: Codable, Hashable, Sendable {
     }
 }
 
+/// A function formulas can use, as Sigma describes it.
+public struct SigmaFunction: Decodable, Hashable, Sendable, Identifiable {
+    public let name: String
+    /// "Math", "Text", "Lookup", "Logical", "Date", "Statistics" or "Info".
+    public let category: String
+    /// "SUMIF(range, criterion, [sum_range])"
+    public let syntax: String
+    public let description: String
+    public var id: String { name }
+
+    public init(name: String, category: String, syntax: String, description: String) {
+        self.name = name
+        self.category = category
+        self.syntax = syntax
+        self.description = description
+    }
+}
+
 /// A cell's place on a sheet. Rows and columns count from zero; "A1" is (0, 0).
 public struct SigmaAddress: Hashable, Sendable, CustomStringConvertible {
     public var row: Int
@@ -450,6 +468,16 @@ public final class SigmaWorkbook: ObservableObject {
         return (Int(out.objectForKeyedSubscript("rows")?.toInt32() ?? 0), Int(out.objectForKeyedSubscript("cols")?.toInt32() ?? 0))
     }
 
+    /// Pastes the values a clip held when it was copied, without formulas or
+    /// formatting: the cells keep their own look. Returns how many rows and
+    /// columns landed.
+    @discardableResult
+    public func pasteValues(_ clip: Clip, at a: SigmaAddress, sheet: Int? = nil) throws -> (rows: Int, columns: Int) {
+        let out = try engine.call("call", [handle, "pasteValues", [sheet ?? activeSheet, a.row, a.column, clip.payload]])
+        changed()
+        return (Int(out.objectForKeyedSubscript("rows")?.toInt32() ?? 0), Int(out.objectForKeyedSubscript("cols")?.toInt32() ?? 0))
+    }
+
     /// Fills `target` (which contains `source`) from the block at its start:
     /// series continue (1, 2, 3…) and formulas shift.
     public func fill(from source: SigmaSelection, to target: SigmaSelection, sheet: Int? = nil) throws {
@@ -499,12 +527,40 @@ public final class SigmaWorkbook: ObservableObject {
         changed()
     }
 
+    /// Copies a sheet (cells, sizes, frozen panes, rules and charts) to just after it, and shows the copy.
+    @discardableResult
+    public func duplicateSheet(_ index: Int) throws -> Int {
+        let i = Int(try engine.call("call", [handle, "duplicateSheet", [index]]).toInt32())
+        guard i >= 0 else { throw SigmaError.editor("That sheet cannot be copied.") }
+        changed()
+        selectSheet(i)
+        return i
+    }
+
+    /// Moves a sheet to another position among the tabs.
+    public func moveSheet(from: Int, to: Int) throws {
+        guard try engine.call("call", [handle, "moveSheet", [from, to]]).toBool() else { return }
+        changed()
+    }
+
     public func deleteSheet(_ index: Int) throws {
         guard try engine.call("call", [handle, "deleteSheet", [index]]).toBool() else {
             throw SigmaError.editor("A workbook needs at least one sheet.")
         }
         changed()
         selectSheet(min(index, sheets.count - 1))
+    }
+
+    // MARK: Formulas
+
+    private var catalog: [SigmaFunction]?
+
+    /// Every function formulas can use, with its syntax and what it does, in name order.
+    public func functions() -> [SigmaFunction] {
+        if let catalog { return catalog }
+        let list = (try? engine.decode([SigmaFunction].self, "functions")) ?? []
+        catalog = list
+        return list
     }
 
     // MARK: Saving

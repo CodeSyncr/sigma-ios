@@ -27,8 +27,8 @@ enum GridColors {
 /// The default text size of a cell, as on the web (13px there, 13pt here).
 let gridFontSize: CGFloat = 13
 
-func gridFont(_ style: SigmaStyle?) -> UIFont {
-    let size = CGFloat(style?.fontSize ?? Double(gridFontSize))
+func gridFont(_ style: SigmaStyle?, zoom: CGFloat = 1) -> UIFont {
+    let size = CGFloat(style?.fontSize ?? Double(gridFontSize)) * zoom
     var font = UIFont.systemFont(ofSize: size, weight: style?.bold == true ? .semibold : .regular)
     if style?.italic == true, let d = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.traitItalic)) {
         font = UIFont(descriptor: d, size: size)
@@ -44,6 +44,8 @@ final class GridCellView: UIView {
         var isError = false
         var style: SigmaStyle?
         var hasNote = false
+        /// The grid's zoom; text scales with it.
+        var zoom: CGFloat = 1
     }
 
     var content = Content() {
@@ -73,7 +75,7 @@ final class GridCellView: UIView {
         ctx.fill(CGRect(x: 0, y: b.maxY - hair, width: b.width, height: hair))
 
         if !content.text.isEmpty {
-            let font = gridFont(style)
+            let font = gridFont(style, zoom: content.zoom)
             var attrs: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: content.isError ? GridColors.error : (GridColors.hex(style?.textColor) ?? GridColors.ink),
@@ -120,6 +122,7 @@ final class GridCellView: UIView {
 final class GridHeaderView: UIView {
     var title = "" { didSet { if title != oldValue { setNeedsDisplay() } } }
     var highlighted = false { didSet { if highlighted != oldValue { setNeedsDisplay() } } }
+    var zoom: CGFloat = 1 { didSet { if zoom != oldValue { setNeedsDisplay() } } }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -141,7 +144,7 @@ final class GridHeaderView: UIView {
         ctx.fill(CGRect(x: b.maxX - hair, y: 0, width: hair, height: b.height))
         ctx.fill(CGRect(x: 0, y: b.maxY - hair, width: b.width, height: hair))
         let text = NSAttributedString(string: title, attributes: [
-            .font: UIFont.systemFont(ofSize: 11, weight: highlighted ? .semibold : .medium),
+            .font: UIFont.systemFont(ofSize: 11 * zoom, weight: highlighted ? .semibold : .medium),
             .foregroundColor: highlighted ? GridColors.accent : GridColors.headerText,
         ])
         let size = text.size()

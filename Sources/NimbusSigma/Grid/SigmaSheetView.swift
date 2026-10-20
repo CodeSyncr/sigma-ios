@@ -128,6 +128,7 @@ struct SheetEditor: View {
                 Divider()
             }
             GridRepresentable(book: book, controller: controller, readOnly: readOnly)
+            FormulaHelpStrip(book: book, controller: controller)
             Divider()
             SheetTabs(book: book, controller: controller, readOnly: readOnly)
         }
@@ -138,6 +139,7 @@ struct SheetEditor: View {
             case .conditionalFormatting: ConditionalFormattingSheet(book: book, controller: controller, readOnly: readOnly)
             case .chart: ChartEditor(book: book, controller: controller)
             case .ai: VaniPanel(session: session, controller: controller)
+            case .functions: FunctionsSheet(book: book, controller: controller)
             case .find: EmptyView()
             }
         }
@@ -165,6 +167,48 @@ struct GridRepresentable: UIViewRepresentable {
 
     func updateUIView(_ grid: SigmaGridView, context: Context) {
         grid.show(book, readOnly: readOnly)
+    }
+}
+
+/// While a formula is typed: the functions a half-typed name could be, or the
+/// syntax of the function being filled in with the current argument in bold.
+struct FormulaHelpStrip: View {
+    @ObservedObject var book: SigmaWorkbook
+    @ObservedObject var controller: SigmaGridController
+
+    var body: some View {
+        let hint = controller.isEditing ? FormulaHint.of(controller.editText, functions: book.functions()) : .none
+        switch hint {
+        case .none:
+            EmptyView()
+        case let .suggest(_, matches):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(matches) { f in
+                        Button { controller.insertFunction(f.name) } label: {
+                            Text(f.name)
+                                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(GridColors.accent))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(uiColor: .systemBackground), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(f.name): \(f.description)")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            .background(Color(uiColor: .secondarySystemBackground))
+        case let .arguments(fn, argument):
+            Text(AttributedString(FormulaKeys.syntax(fn, argument: argument)))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(uiColor: .secondarySystemBackground))
+        }
     }
 }
 
@@ -233,6 +277,13 @@ struct SheetTabs: View {
                         .contextMenu {
                             if !readOnly {
                                 Button { newName = sheet.name; renaming = i } label: { Label("Rename", systemImage: "pencil") }
+                                Button { _ = try? book.duplicateSheet(i) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                                if i > 0 {
+                                    Button { try? book.moveSheet(from: i, to: i - 1) } label: { Label("Move Left", systemImage: "arrow.left") }
+                                }
+                                if i < book.sheets.count - 1 {
+                                    Button { try? book.moveSheet(from: i, to: i + 1) } label: { Label("Move Right", systemImage: "arrow.right") }
+                                }
                                 Button(role: .destructive) { try? book.deleteSheet(i) } label: { Label("Delete", systemImage: "trash") }
                                     .disabled(book.sheets.count < 2)
                             }

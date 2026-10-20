@@ -278,4 +278,53 @@ struct RuleEditor: View {
         return SigmaSelection(active: a, corner: b)
     }
 }
+/// Every function formulas can use, searchable and by category. A tap puts
+/// the function into the formula being typed, or starts one in the active cell.
+struct FunctionsSheet: View {
+    @ObservedObject var book: SigmaWorkbook
+    @ObservedObject var controller: SigmaGridController
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                let shown = book.functions().filter {
+                    query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query)
+                }
+                if shown.isEmpty {
+                    Text("No function matches “\(query)”.").foregroundStyle(.secondary)
+                }
+                ForEach(Dictionary(grouping: shown, by: \.category).sorted(by: { $0.key < $1.key }), id: \.key) { category, fns in
+                    Section(category) {
+                        ForEach(fns) { f in
+                            Button {
+                                dismiss()
+                                controller.insertFunction(f.name)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(f.syntax).font(.system(.subheadline, design: .monospaced).weight(.semibold)).foregroundStyle(.primary)
+                                    if !f.description.isEmpty {
+                                        Text(f.description).font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search functions")
+            .navigationTitle("Insert Function")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
 #endif

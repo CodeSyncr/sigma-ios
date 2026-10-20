@@ -106,7 +106,7 @@ extension SigmaGridView {
             bodyPane.bringSubviewToFront(host)
             if draggingChart != chart.id {
                 let origin = geometry.rect(row: min(chart.row, geometry.rows - 1), column: min(chart.column, geometry.columns - 1)).origin
-                host.frame = CGRect(origin: origin, size: CGSize(width: chart.width, height: chart.height))
+                host.frame = CGRect(origin: origin, size: CGSize(width: chart.width * zoom, height: chart.height * zoom))
             }
             host.show(chart, data)
             host.selected = controller.selectedChart == chart.id
@@ -151,8 +151,8 @@ extension SigmaGridView {
             return
         }
         draggingChart = nil
-        chart.width = Double(size.width.rounded())
-        chart.height = Double(size.height.rounded())
+        chart.width = Double((size.width / zoom).rounded())
+        chart.height = Double((size.height / zoom).rounded())
         try? book.updateChart(chart)
         setNeedsLayout()
     }

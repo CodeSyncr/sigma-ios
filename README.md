@@ -20,7 +20,7 @@ or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/CodeSyncr/sigma-ios.git", from: "2.1.0"),
+    .package(url: "https://github.com/CodeSyncr/sigma-ios.git", from: "2.1.1"),
 ],
 targets: [
     .target(name: "App", dependencies: [.product(name: "NimbusSigma", package: "sigma-ios")]),
@@ -30,7 +30,7 @@ targets: [
 CocoaPods:
 
 ```ruby
-pod 'NimbusSigma', :git => 'https://github.com/CodeSyncr/sigma-ios.git', :tag => '2.1.0'
+pod 'NimbusSigma', :git => 'https://github.com/CodeSyncr/sigma-ios.git', :tag => '2.1.1'
 ```
 
 ## How it fits together

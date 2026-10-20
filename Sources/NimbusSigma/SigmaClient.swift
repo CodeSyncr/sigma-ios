@@ -32,6 +32,7 @@ public struct SigmaClient: Sendable {
     ///   - idempotencyKey: Send the same key when retrying, and a retried
     ///     upload returns the original document instead of a second one.
     ///   - retainDays: Delete the document automatically after this many days.
+    ///   - ai: Whether the returned link offers Vani (it still needs a plan that includes it).
     public func upload(
         _ data: Data,
         filename: String,
@@ -39,7 +40,8 @@ public struct SigmaClient: Sendable {
         mode: SigmaLinkMode = .edit,
         linkLifetime: TimeInterval? = nil,
         retainDays: Int? = nil,
-        idempotencyKey: String? = nil
+        idempotencyKey: String? = nil,
+        ai: Bool = true
     ) async throws -> SigmaDocument {
         let boundary = "sigma-" + UUID().uuidString
         var body = Data()
@@ -52,7 +54,7 @@ public struct SigmaClient: Sendable {
         body.append(data)
         body.append("\r\n--\(boundary)--\r\n")
 
-        var req = request("documents", query: linkQuery(mode: mode, lifetime: linkLifetime, retainDays: retainDays), method: "POST")
+        var req = request("documents", query: linkQuery(mode: mode, lifetime: linkLifetime, retainDays: retainDays, ai: ai), method: "POST")
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         if let idempotencyKey { req.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key") }
         req.httpBody = body
@@ -65,9 +67,10 @@ public struct SigmaClient: Sendable {
         format: SigmaFormat = .xlsx,
         mode: SigmaLinkMode = .edit,
         linkLifetime: TimeInterval? = nil,
-        retainDays: Int? = nil
+        retainDays: Int? = nil,
+        ai: Bool = true
     ) async throws -> SigmaDocument {
-        var req = request("documents", query: linkQuery(mode: mode, lifetime: linkLifetime, retainDays: retainDays), method: "POST")
+        var req = request("documents", query: linkQuery(mode: mode, lifetime: linkLifetime, retainDays: retainDays, ai: ai), method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["title": title, "blank": format.rawValue])
         return try await send(req)
@@ -87,10 +90,14 @@ public struct SigmaClient: Sendable {
 
     /// A fresh signed link for a document — what your server hands the app.
     ///
-    /// - Parameter lifetime: How long the link may be used to open the sheet:
-    ///   one minute to seven days, fifteen minutes by default.
-    public func link(for id: Int, mode: SigmaLinkMode = .edit, lifetime: TimeInterval? = nil) async throws -> SigmaLink {
-        try await send(request("documents/\(id)/link", query: linkQuery(mode: mode, lifetime: lifetime, retainDays: nil), method: "POST"))
+    /// - Parameters:
+    ///   - lifetime: How long the link may be used to open the sheet: one
+    ///     minute to seven days, fifteen minutes by default.
+    ///   - ai: Whether the person the link is for gets Vani. Pass false for
+    ///     someone who has not paid you for AI; it is signed into the link.
+    ///     Vani also needs a Nimbus Cloud plan that includes it.
+    public func link(for id: Int, mode: SigmaLinkMode = .edit, lifetime: TimeInterval? = nil, ai: Bool = true) async throws -> SigmaLink {
+        try await send(request("documents/\(id)/link", query: linkQuery(mode: mode, lifetime: lifetime, retainDays: nil, ai: ai), method: "POST"))
     }
 
     /// The document's file as it is now, edits included, in its own format.
@@ -122,8 +129,9 @@ public struct SigmaClient: Sendable {
 
     // MARK: Plumbing
 
-    private func linkQuery(mode: SigmaLinkMode, lifetime: TimeInterval?, retainDays: Int?) -> [URLQueryItem] {
+    private func linkQuery(mode: SigmaLinkMode, lifetime: TimeInterval?, retainDays: Int?, ai: Bool) -> [URLQueryItem] {
         var q = [URLQueryItem(name: "mode", value: mode.rawValue)]
+        if !ai { q.append(URLQueryItem(name: "ai", value: "off")) }
         if let lifetime { q.append(URLQueryItem(name: "ttl", value: String(Int(lifetime.rounded())))) }
         if let retainDays { q.append(URLQueryItem(name: "retain_days", value: String(retainDays))) }
         return q

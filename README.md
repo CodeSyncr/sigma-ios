@@ -95,8 +95,28 @@ navigationController?.pushViewController(SigmaSheetViewController(session: sessi
 - **Formatting:** bold, italic, underline, strikethrough, text and fill colours, alignment, number formats, decimals, text size, borders, Clear formatting.
 - **Data:** find and replace, sort (a header row stays put), conditional formatting, notes.
 - **Charts:** column, bar, line, area, scatter, pie and doughnut, drawn with Swift Charts and bound to their cells. Move, resize, restyle, delete.
-- **Vani AI**, when your Nimbus Cloud account is on Pro: people ask, and apply the change it proposes as one undo step. Its use counts against your plan.
+- **Vani AI**, when your Nimbus Cloud account is on a paid plan and the link allows it (see below): people ask, and apply the change it proposes as one undo step. Its use counts against your plan.
 - **Share:** the sheet as Excel or CSV through the system share sheet.
+
+### The header
+
+Above the formula bar: a back arrow, Sigma's mark, the sheet's title with where its edits are (Saved, Saving…, View only), and sharing. Tapping the title renames the sheet. The editor's menus are its own, so they look the same as on Android.
+
+```swift
+SigmaSheetView(session: session, header: SigmaHeader { router.pop() })  // without onBack: SwiftUI's dismiss
+SigmaSheetView(session: session, header: SigmaHeader(showsLogo: false)) // or showsBack: false
+SigmaSheetView(session: session, header: .hidden)                       // your screen has its own bar
+```
+
+`SigmaSheetViewController` pops itself, or closes itself when presented.
+
+### Who gets Vani
+
+Vani needs a paid Nimbus Cloud plan, and you decide which of your users get it: mint the link with `ai: false` (the API's `?ai=off`) for someone who has not paid you for AI, and their editor has no Vani. The choice is signed into the link, so the app cannot turn it back on.
+
+```swift
+let link = try await sigma.link(for: doc.id, ai: user.hasAI)
+```
 
 ### The session
 
@@ -164,6 +184,10 @@ SIGMA_CLOUD=http://localhost:3333 SIGMA_KEY=sgm_test_… Examples/SigmaDemo/run-
 ```bash
 SIGMA_E2E_CLOUD=http://localhost:3333 SIGMA_E2E_KEY=sgm_test_… swift test
 ```
+
+## Third-party notices
+
+The icons in the editor's menus and header are [Material Symbols](https://github.com/google/material-design-icons) by Google, under the Apache License 2.0, the same glyphs as the Android SDK's.
 
 ## License
 

@@ -2,6 +2,10 @@
 
 ## 2.1.1
 
+- **A header** above the formula bar: a back arrow, Sigma's mark, the sheet's title with where its edits are (Saved, Saving…, View only), and sharing. Tap the title to rename the sheet. `SigmaSheetView(session:, header: SigmaHeader(showsBack: false))`, `SigmaHeader(showsLogo: false)` or `.hidden`; `onBack` decides what the arrow does (SwiftUI's dismiss when it is nil; `SigmaSheetViewController` pops or closes itself).
+- **The editor's own menus.** The cell menu, ⋯ More, the format bar's menus, the sheet tab menu, find options and the conditional formatting choices are drawn by the SDK, the same as on Android: a rounded card with icons, Cut, Copy, Paste and Clear across the top of the cell menu, and submenus that slide in place. They replace the system edit menu, context menus and pickers.
+- Sharing moved from the format bar to the header.
+- Vani is offered only when the link allows it: a link minted with `ai=off` keeps it from that person (see the API's `ai` option). `SigmaClient.link(for:mode:lifetime:ai:)` mints one.
 - **Vani AI looks as it does in Website Studio.** The launcher is Studio's pill: Nimbo, the mascot, waving, with "Ask Vani" (Nimbo alone on a phone). It floats over the grid in place of the format bar pill; drag it anywhere and it snaps to the nearer side, and the app remembers where. While Vani works Nimbo thinks and a ring pulses, even with the panel closed. The panel is Studio's too: Nimbo and "Vani" in the header, his greeting and ways to start, ink and white bubbles, Nimbo waiting for the answer, the composer, and New chat. Nimbo is drawn natively, so nothing extra is downloaded.
 - **Formula help:** typing a function name offers the functions it could be, above the keyboard; inside a call, the syntax shows with the current argument highlighted. **Insert Function** (the ƒx key and button) lists every function by category, searchable. The list comes from Sigma's engine, so it is always what Sigma computes. `SigmaWorkbook.functions()` returns it; `FormulaHint` reads a formula as typed.
 - **Pinch to zoom**, 50% to 200% (⌘+ / ⌘− / ⌘0 on an iPad keyboard).

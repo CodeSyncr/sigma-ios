@@ -77,6 +77,10 @@ final class ClientTests: XCTestCase {
         let link = try await client.link(for: 2, mode: .view, lifetime: 120)
         XCTAssertEqual(link.mode, .view)
         XCTAssertEqual(StubProtocol.seen.last?.url?.query, "mode=view&ttl=120")
+
+        // A link for someone who should not have Vani.
+        _ = try await client.link(for: 2, ai: false)
+        XCTAssertEqual(StubProtocol.seen.last?.url?.query, "mode=edit&ai=off")
     }
 
     func testErrors() async {

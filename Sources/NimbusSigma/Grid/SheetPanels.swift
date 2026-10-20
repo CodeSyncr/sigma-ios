@@ -40,10 +40,12 @@ struct FindBar: View {
                 .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
                 Button { step(-1) } label: { Image(systemName: "chevron.up") }.disabled(hits.isEmpty).accessibilityLabel("Previous")
                 Button { step(1) } label: { Image(systemName: "chevron.down") }.disabled(hits.isEmpty).accessibilityLabel("Next")
-                Menu {
-                    Toggle("Match case", isOn: $matchCase)
-                    if !readOnly { Toggle("Replace", isOn: $replacing) }
-                } label: { Image(systemName: "ellipsis.circle") }
+                MenuButton(controller: controller, items: {
+                    var items = [SigmaMenuItem(title: "Match case", icon: .matchCase, checked: matchCase) { matchCase.toggle() }]
+                    if !readOnly { items.append(SigmaMenuItem(title: "Replace", icon: .replace, checked: replacing) { replacing.toggle() }) }
+                    return items
+                }) { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel("Find options")
                 Button("Done") { controller.panel = nil }.fontWeight(.semibold)
             }
             if replacing && !readOnly {
@@ -185,12 +187,14 @@ struct ConditionalFormattingSheet: View {
                 }
             }
             .navigationDestination(isPresented: $adding) {
-                RuleEditor(range: controller.selection) { rule in
+                RuleEditor(controller: controller, range: controller.selection) { rule in
                     try? book.addConditionalRule(rule)
                     adding = false
                 }
             }
         }
+        // This sheet covers the editor, so its menus open over it here.
+        .overlay { SigmaMenuLayer(controller: controller) }
         .presentationDetents([.medium, .large])
     }
 
@@ -205,6 +209,7 @@ struct ConditionalFormattingSheet: View {
 }
 
 struct RuleEditor: View {
+    @ObservedObject var controller: SigmaGridController
     let range: SigmaSelection
     let add: (SigmaConditionalRule) -> Void
     @State private var rangeText = ""
@@ -229,18 +234,18 @@ struct RuleEditor: View {
                     .font(.body.monospaced())
             }
             Section("When the value is") {
-                Picker("Condition", selection: $condition) {
-                    ForEach(SigmaConditionalRule.Condition.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
+                let conditions = SigmaConditionalRule.Condition.allCases
+                SigmaPicker(controller: controller, title: "Condition", options: conditions.map(\.label), selection: Binding(
+                    get: { conditions.firstIndex(of: condition) ?? 0 },
+                    set: { condition = conditions[$0] }
+                ))
                 if condition.needsValue {
                     TextField(condition == .contains ? "Text" : "Value", text: $value)
                     if condition == .between { TextField("And", text: $value2) }
                 }
             }
             Section("Format them") {
-                Picker("Look", selection: $look) {
-                    ForEach(looks.indices, id: \.self) { i in Text(looks[i].name).tag(i) }
-                }
+                SigmaPicker(controller: controller, title: "Look", options: looks.map(\.name), selection: $look)
                 Toggle("Bold", isOn: $bold)
                 HStack {
                     Text("Preview")

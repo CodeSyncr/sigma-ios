@@ -34,6 +34,8 @@ public final class SigmaGridController: ObservableObject {
     @Published var aiFailure: String?
     /// The conversation with Vani AI, kept while the sheet is open.
     @Published public var aiMessages: [SigmaAIMessage] = []
+    /// The editor's menu, while one is open.
+    @Published var menu: SigmaMenuRequest?
 
     /// Charts the selection: a single cell charts the block of data around it.
     public func insertChart(_ kind: SigmaChart.Kind = .column) {
@@ -183,7 +185,7 @@ public final class SigmaGridController: ObservableObject {
 /// editing. One reusable view per visible cell; nothing is drawn twice while
 /// it stays on screen.
 @MainActor
-final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelegate, @preconcurrency UIEditMenuInteractionDelegate, UIGestureRecognizerDelegate {
+final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelegate, UIGestureRecognizerDelegate {
     enum Move { case down, up, right, left, none }
     enum Action { case undo, redo, cut, copy, paste, pasteValues, clear, fill, fillDown, fillRight, insertRowAbove, insertRowBelow, deleteRows, insertColumnLeft, insertColumnRight, deleteColumns, edit, freezeHere, freezeOneRow, freezeTwoRows, freezeOneColumn, unfreeze, sortAscending, sortDescending, note, conditionalFormatting, find }
 
@@ -234,7 +236,6 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     private var editing: SigmaAddress?
     private var clip: SigmaWorkbook.Clip?
     var hasClip: Bool { clip != nil }
-    private lazy var editMenu = UIEditMenuInteraction(delegate: self)
 
     init(controller: SigmaGridController) {
         self.controller = controller
@@ -277,7 +278,6 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         addGestureRecognizer(resize)
         panGestureRecognizer.require(toFail: resize)
         addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
-        addInteraction(editMenu)
     }
 
     @available(*, unavailable)
@@ -378,7 +378,7 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
     override func scrollRectToVisible(_ rect: CGRect, animated: Bool) {}
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if editMenuShowing { editMenu.dismissMenu() }
+        if controller.menu != nil { controller.menu = nil }
     }
 
     /// Fetches what the cells around the screen show, in one call to the engine.
@@ -587,7 +587,6 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
             UISelectionFeedbackGenerator().selectionChanged()
             setNeedsLayout()
         }
-        if ended { showMenu(at: CGPoint(x: p.x + contentOffset.x, y: p.y + contentOffset.y)) }
     }
 
     /// Fill mode: the target grows from the selection in the direction dragged furthest.
@@ -980,83 +979,104 @@ final class SigmaGridView: UIScrollView, UIScrollViewDelegate, UITextFieldDelega
         note.notificationOccurred(.error)
     }
 
-    // MARK: Edit menu
+    // MARK: Menu
 
-    private var editMenuShowing = false
-
-    func showMenu(at p: CGPoint) {
-        guard editing == nil else { return }
-        editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: p))
+    private func act(_ title: String, _ a: Action, _ icon: SigmaIcon? = nil, destructive: Bool = false, enabled: Bool = true) -> SigmaMenuItem {
+        SigmaMenuItem(title: title, icon: icon, destructive: destructive, enabled: enabled) { [weak self] in self?.perform(a) }
     }
 
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
+    private func freezeMenu(_ s: SigmaSelection) -> SigmaMenuItem {
+        let g = geometry
+        var items = [act("1 row", .freezeOneRow), act("2 rows", .freezeTwoRows), act("1 column", .freezeOneColumn), act("Up to \(s.active)", .freezeHere)]
+        if g.frozenRows > 0 || g.frozenColumns > 0 { items.append(act("No frozen panes", .unfreeze)) }
+        return SigmaMenuItem(title: "Freeze", icon: .freeze, children: items)
+    }
+
+    func rowItems(_ s: SigmaSelection) -> [SigmaMenuItem] {
+        let word = s.bottom > s.top ? "rows" : "row"
+        return [act("Insert \(word) above", .insertRowAbove, .insert), act("Insert \(word) below", .insertRowBelow, .insert),
+                act("Delete \(word)", .deleteRows, .delete, destructive: true)]
+    }
+
+    func columnItems(_ s: SigmaSelection) -> [SigmaMenuItem] {
+        let word = s.right > s.left ? "columns" : "column"
+        return [act("Insert \(word) left", .insertColumnLeft, .insert), act("Insert \(word) right", .insertColumnRight, .insert),
+                act("Delete \(word)", .deleteColumns, .delete, destructive: true)]
+    }
+
+    private func fillMenu(_ s: SigmaSelection) -> SigmaMenuItem {
+        var items = [act("Drag to fill…", .fill)]
+        if s.bottom > s.top { items.append(act("Fill down", .fillDown)) }
+        if s.right > s.left { items.append(act("Fill right", .fillRight)) }
+        return SigmaMenuItem(title: "Fill", icon: .fill, children: items)
+    }
+
+    private var sortMenu: SigmaMenuItem {
+        SigmaMenuItem(title: "Sort", icon: .sort, children: [act("Sort A → Z", .sortAscending, .sortAscending), act("Sort Z → A", .sortDescending, .sortDescending)])
+    }
+
+    private func noteItem(_ s: SigmaSelection) -> SigmaMenuItem {
+        act(controller.activeNote.isEmpty ? "Add note" : "Edit note", .note, .note, enabled: s.isSingle)
+    }
+
+    /// The format bar's pinned ⋯ menu: the sheet tools that otherwise sit behind a long press.
+    func moreMenu() -> [SigmaMenuItem] {
+        let s = controller.selection
+        return [
+            freezeMenu(s),
+            SigmaMenuItem(title: "Rows", icon: .rows, children: rowItems(s)),
+            SigmaMenuItem(title: "Columns", icon: .columns, children: columnItems(s)),
+            fillMenu(s),
+            sortMenu,
+            act("Paste values only", .pasteValues, .paste, enabled: clip != nil),
+            noteItem(s),
+        ]
+    }
+
+    /// The cell menu, at the finger: the clipboard across the top, then the sheet tools. A chart has its own.
+    func showMenu(at p: CGPoint) {
+        guard editing == nil else { return }
+        let anchor = CGRect(origin: convert(p, to: nil), size: .zero)
         if let id = controller.selectedChart {
-            guard !controller.readOnly else { return nil }
-            return UIMenu(children: [
-                UIAction(title: "Edit Chart", image: UIImage(systemName: "slider.horizontal.3")) { [weak self] _ in self?.controller.panel = .chart },
-                UIAction(title: "Delete Chart", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            guard !controller.readOnly else { return }
+            controller.showMenu([
+                SigmaMenuItem(title: "Edit chart", icon: .edit) { [weak self] in self?.controller.panel = .chart },
+                SigmaMenuItem(title: "Delete chart", icon: .delete, destructive: true) { [weak self] in
                     try? self?.workbook?.removeChart(id: id)
                     self?.controller.selectedChart = nil
                 },
-            ])
+            ], at: anchor)
+            return
         }
         let s = controller.selection
         let g = geometry
         let wholeRows = s.left == 0 && s.right == g.columns - 1
         let wholeColumns = s.top == 0 && s.bottom == g.rows - 1
-        let ro = controller.readOnly
-        func act(_ title: String, _ image: String?, _ a: Action, destructive: Bool = false) -> UIAction {
-            UIAction(title: title, image: image.flatMap(UIImage.init(systemName:)), attributes: destructive ? .destructive : []) { [weak self] _ in self?.perform(a) }
+        guard !controller.readOnly else {
+            controller.showMenu([act("Copy", .copy, .copy)], at: anchor)
+            return
         }
-        var basics: [UIMenuElement] = [act("Copy", "doc.on.doc", .copy)]
-        if !ro {
-            basics.insert(act("Cut", "scissors", .cut), at: 0)
-            if UIPasteboard.general.hasStrings { basics.append(act("Paste", "doc.on.clipboard", .paste)) }
-            // Values only needs Sigma's own copy, which knows what the cells computed.
-            if clip != nil { basics.append(act("Paste Values Only", "doc.on.clipboard.fill", .pasteValues)) }
-            basics.append(act("Clear", "eraser", .clear))
-            if s.isSingle { basics.insert(act("Edit", "pencil", .edit), at: 0) }
-        }
-        guard !ro else { return UIMenu(children: basics) }
-        var more: [UIMenuElement] = []
-        if !wholeRows && !wholeColumns {
-            var fills = [act("Drag to Fill…", "square.and.arrow.down.on.square", .fill)]
-            if s.bottom > s.top { fills.append(act("Fill Down", "arrow.down.to.line", .fillDown)) }
-            if s.right > s.left { fills.append(act("Fill Right", "arrow.right.to.line", .fillRight)) }
-            more.append(UIMenu(title: "Fill", image: UIImage(systemName: "square.and.pencil"), children: fills))
-        }
-        let rowWord = s.bottom > s.top ? "Rows" : "Row"
-        let colWord = s.right > s.left ? "Columns" : "Column"
-        let rowItems = [act("Insert \(rowWord) Above", "arrow.up.to.line.compact", .insertRowAbove), act("Insert \(rowWord) Below", "arrow.down.to.line.compact", .insertRowBelow), act("Delete \(rowWord)", "trash", .deleteRows, destructive: true)]
-        let colItems = [act("Insert \(colWord) Left", "arrow.left.to.line.compact", .insertColumnLeft), act("Insert \(colWord) Right", "arrow.right.to.line.compact", .insertColumnRight), act("Delete \(colWord)", "trash", .deleteColumns, destructive: true)]
-        if wholeRows { more += rowItems }
-        else if wholeColumns { more += colItems }
+        let quick = [
+            SigmaMenuQuick(icon: .cut, label: "Cut") { [weak self] in self?.perform(.cut) },
+            SigmaMenuQuick(icon: .copy, label: "Copy") { [weak self] in self?.perform(.copy) },
+            SigmaMenuQuick(icon: .paste, label: "Paste", enabled: UIPasteboard.general.hasStrings) { [weak self] in self?.perform(.paste) },
+            SigmaMenuQuick(icon: .clear, label: "Clear") { [weak self] in self?.perform(.clear) },
+        ]
+        var items: [SigmaMenuItem] = []
+        if s.isSingle { items.append(act("Edit", .edit, .edit)) }
+        // Values only needs Sigma's own copy, which knows what the cells computed.
+        if clip != nil { items.append(act("Paste values only", .pasteValues, .paste)) }
+        if !wholeRows && !wholeColumns { items.append(fillMenu(s)) }
+        if wholeRows { items += rowItems(s) }
+        else if wholeColumns { items += columnItems(s) }
         else {
-            more.append(UIMenu(title: "Rows", image: UIImage(systemName: "rectangle.split.1x2"), children: rowItems))
-            more.append(UIMenu(title: "Columns", image: UIImage(systemName: "rectangle.split.2x1"), children: colItems))
+            items.append(SigmaMenuItem(title: "Rows", icon: .rows, children: rowItems(s)))
+            items.append(SigmaMenuItem(title: "Columns", icon: .columns, children: columnItems(s)))
         }
-        if !wholeRows {
-            more.append(UIMenu(title: "Sort", image: UIImage(systemName: "arrow.up.arrow.down"), children: [
-                act("Sort A → Z", "arrow.up", .sortAscending), act("Sort Z → A", "arrow.down", .sortDescending),
-            ]))
-        }
-        if s.isSingle {
-            more.append(act(controller.activeNote.isEmpty ? "Add Note" : "Edit Note", "note.text", .note))
-        }
-        let frozen = g.frozenRows > 0 || g.frozenColumns > 0
-        var freezes = [act("1 Row", nil, .freezeOneRow), act("2 Rows", nil, .freezeTwoRows), act("1 Column", nil, .freezeOneColumn),
-                       act("Up to \(s.active)", nil, .freezeHere)]
-        if frozen { freezes.append(act("No Frozen Panes", nil, .unfreeze)) }
-        more.append(UIMenu(title: "Freeze", image: UIImage(systemName: "snowflake"), children: freezes))
-        return UIMenu(children: basics + more)
-    }
-
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willPresentMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
-        editMenuShowing = true
-    }
-
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
-        editMenuShowing = false
+        if !wholeRows { items.append(sortMenu) }
+        if s.isSingle { items.append(noteItem(s)) }
+        items.append(freezeMenu(s))
+        controller.showMenu(items, quick: quick, at: anchor)
     }
 
     // MARK: Hardware keyboard

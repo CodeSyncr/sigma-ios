@@ -19,44 +19,118 @@ public struct SigmaSheetView: View {
     @ObservedObject private var session: SigmaSession
     @StateObject private var ownController = SigmaGridController()
     private let external: SigmaGridController?
+    private let header: SigmaHeader
+    @Environment(\.dismiss) private var dismiss
+    @State private var shared: SigmaFile?
+    @State private var shareFailed: String?
+    @State private var renaming = false
+    @State private var newTitle = ""
 
-    /// - Parameter controller: Pass your own to read the selection or drive
-    ///   the grid from your controls; one is kept for the view otherwise.
-    public init(session: SigmaSession, controller: SigmaGridController? = nil) {
+    /// - Parameters:
+    ///   - controller: Pass your own to read the selection or drive the grid
+    ///     from your controls; one is kept for the view otherwise.
+    ///   - header: What the header shows; ``SigmaHeader/hidden`` removes it.
+    public init(session: SigmaSession, controller: SigmaGridController? = nil, header: SigmaHeader = .standard) {
         self.session = session
         self.external = controller
+        self.header = header
     }
 
     private var controller: SigmaGridController { external ?? ownController }
 
-    public var body: some View {
-        Group {
-            switch session.phase {
-            case .loading:
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            case let .failed(error):
-                VStack(spacing: 12) {
-                    Image(systemName: "tablecells.badge.ellipsis")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.secondary)
-                    Text(error.errorDescription ?? "The sheet could not be opened.")
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                    Button("Try again") { session.reload() }.buttonStyle(.bordered)
-                }
-                .padding(32)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .ready:
-                if let book = session.workbook {
-                    SheetEditor(session: session, book: book, controller: controller, readOnly: session.document?.mode != .edit)
-                }
+    private var canEdit: Bool { session.phase == .ready && session.document?.mode == .edit }
+
+    /// Where the sheet's edits are, as the header says it.
+    private var status: String {
+        switch session.phase {
+        case .loading: return "Opening…"
+        case .failed: return "Could not open"
+        case .ready:
+            guard canEdit else { return "View only" }
+            switch session.saveState {
+            case .saved: return "Saved"
+            case .unsaved: return "Edited"
+            case .saving: return "Saving…"
+            case .failed: return "Not saved"
             }
+        }
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            if header.isVisible {
+                HeaderBar(
+                    header: header,
+                    title: session.title.isEmpty ? (session.document?.title ?? "") : session.title,
+                    status: status,
+                    canShare: canEdit,
+                    canRename: canEdit,
+                    back: { header.onBack?() ?? dismiss() },
+                    rename: { newTitle = session.title; renaming = true },
+                    share: { frame in
+                        controller.showMenu([
+                            SigmaMenuItem(title: "Excel workbook (.xlsx)", icon: .xlsx) { export(.xlsx) },
+                            SigmaMenuItem(title: "CSV of this sheet", icon: .csv) { export(.csv) },
+                        ], at: frame)
+                    }
+                )
+                Divider()
+            }
+            content
+        }
+        .background(Color(uiColor: .systemBackground))
+        .overlay { SigmaMenuLayer(controller: controller) }
+        .background(EmptyView().sheet(item: $shared) { file in
+            if let sheet = try? SigmaShareSheet(file: file) { sheet.ignoresSafeArea() }
+        })
+        .alert("The sheet could not be exported", isPresented: Binding(get: { shareFailed != nil }, set: { if !$0 { shareFailed = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(shareFailed ?? "") }
+        .alert("Rename", isPresented: $renaming) {
+            TextField("Name", text: $newTitle)
+            Button("Rename") {
+                let name = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty, name != session.title { session.title = name }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .onAppear { session.start() }
     }
+
+    @ViewBuilder private var content: some View {
+        switch session.phase {
+        case .loading:
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        case let .failed(error):
+            VStack(spacing: 12) {
+                Image(systemName: "tablecells.badge.ellipsis")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.secondary)
+                Text(error.errorDescription ?? "The sheet could not be opened.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                Button("Try again") { session.reload() }.buttonStyle(.bordered)
+            }
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .ready:
+            if let book = session.workbook {
+                SheetEditor(session: session, book: book, controller: controller, readOnly: session.document?.mode != .edit)
+            } else {
+                Color.clear
+            }
+        }
+    }
+
+    private func export(_ format: SigmaFormat) {
+        Task {
+            do { shared = try await session.export(format) } catch { shareFailed = (error as? SigmaError)?.errorDescription ?? error.localizedDescription }
+        }
+    }
 }
 
-/// ``SigmaSheetView`` for UIKit apps.
+/// ``SigmaSheetView`` for UIKit apps. Its back arrow pops it, or closes it
+/// when it was presented, unless the header has its own ``SigmaHeader/onBack``.
 ///
 /// ```swift
 /// let session = SigmaSession { try await MyAPI.sheetLink(id: 42) }
@@ -65,10 +139,12 @@ public struct SigmaSheetView: View {
 public final class SigmaSheetViewController: UIViewController {
     public let session: SigmaSession
     public let controller: SigmaGridController
+    public let header: SigmaHeader
 
-    public init(session: SigmaSession, controller: SigmaGridController? = nil) {
+    public init(session: SigmaSession, controller: SigmaGridController? = nil, header: SigmaHeader = .standard) {
         self.session = session
         self.controller = controller ?? SigmaGridController()
+        self.header = header
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -77,7 +153,18 @@ public final class SigmaSheetViewController: UIViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        let host = UIHostingController(rootView: SigmaSheetView(session: session, controller: controller))
+        var header = header
+        if header.onBack == nil {
+            header.onBack = { [weak self] in
+                guard let self else { return }
+                if let nav = navigationController, nav.viewControllers.count > 1, nav.topViewController === self {
+                    nav.popViewController(animated: true)
+                } else {
+                    dismiss(animated: true)
+                }
+            }
+        }
+        let host = UIHostingController(rootView: SigmaSheetView(session: session, controller: controller, header: header))
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host.view)
@@ -96,8 +183,6 @@ struct SheetEditor: View {
     @ObservedObject var book: SigmaWorkbook
     @ObservedObject var controller: SigmaGridController
     let readOnly: Bool
-    @State private var shared: SigmaFile?
-    @State private var shareFailed: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,11 +197,7 @@ struct SheetEditor: View {
                     .background(Color(red: 1, green: 0.95, blue: 0.8))
             }
             if !readOnly {
-                FormatBar(controller: controller) { format in
-                    Task {
-                        do { shared = try await session.export(format) } catch { shareFailed = (error as? SigmaError)?.errorDescription ?? error.localizedDescription }
-                    }
-                }
+                FormatBar(controller: controller)
                 Divider()
             }
             if controller.panel == .find {
@@ -144,12 +225,6 @@ struct SheetEditor: View {
             case .find: EmptyView()
             }
         }
-        .background(EmptyView().sheet(item: $shared) { file in
-            if let sheet = try? SigmaShareSheet(file: file) { sheet.ignoresSafeArea() }
-        })
-        .alert("The sheet could not be exported", isPresented: Binding(get: { shareFailed != nil }, set: { if !$0 { shareFailed = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: { Text(shareFailed ?? "") }
         .onAppear { controller.aiAvailable = session.aiAvailable && !readOnly }
         .onChange(of: session.aiAvailable) { on in controller.aiAvailable = on && !readOnly }
     }
@@ -253,6 +328,37 @@ struct FormulaBar: View {
     }
 }
 
+/// One sheet's tab: a tap opens it, a long press its menu.
+private struct SheetTab: View {
+    let name: String
+    let on: Bool
+    let select: () -> Void
+    let menu: (CGRect) -> Void
+    @State private var frame: CGRect = .zero
+
+    var body: some View {
+        Text(name)
+            .font(.system(size: 13, weight: on ? .semibold : .regular))
+            .foregroundStyle(on ? Color(GridColors.accent) : Color.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(on ? Color(GridColors.headerSelected) : Color.clear, in: Capsule())
+            .contentShape(Capsule())
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { frame = g.frame(in: .global) }
+                    .onChange(of: g.frame(in: .global)) { frame = $0 }
+            })
+            .onTapGesture(perform: select)
+            .onLongPressGesture {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                menu(frame)
+            }
+            .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction(named: "Sheet options") { menu(frame) }
+    }
+}
+
 /// Sheets along the bottom, with undo and redo.
 struct SheetTabs: View {
     @ObservedObject var book: SigmaWorkbook
@@ -266,28 +372,18 @@ struct SheetTabs: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(Array(book.sheets.enumerated()), id: \.offset) { i, sheet in
-                        let on = i == book.activeSheet
-                        Button { book.selectSheet(i) } label: {
-                            Text(sheet.name)
-                                .font(.system(size: 13, weight: on ? .semibold : .regular))
-                                .foregroundStyle(on ? Color(GridColors.accent) : Color.primary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(on ? Color(GridColors.headerSelected) : Color.clear, in: Capsule())
-                        }
-                        .contextMenu {
-                            if !readOnly {
-                                Button { newName = sheet.name; renaming = i } label: { Label("Rename", systemImage: "pencil") }
-                                Button { _ = try? book.duplicateSheet(i) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
-                                if i > 0 {
-                                    Button { try? book.moveSheet(from: i, to: i - 1) } label: { Label("Move Left", systemImage: "arrow.left") }
-                                }
-                                if i < book.sheets.count - 1 {
-                                    Button { try? book.moveSheet(from: i, to: i + 1) } label: { Label("Move Right", systemImage: "arrow.right") }
-                                }
-                                Button(role: .destructive) { try? book.deleteSheet(i) } label: { Label("Delete", systemImage: "trash") }
-                                    .disabled(book.sheets.count < 2)
-                            }
+                        SheetTab(name: sheet.name, on: i == book.activeSheet) {
+                            book.selectSheet(i)
+                        } menu: { frame in
+                            guard !readOnly else { return }
+                            let count = book.sheets.count
+                            controller.showMenu([
+                                SigmaMenuItem(title: "Rename", icon: .rename) { newName = sheet.name; renaming = i },
+                                SigmaMenuItem(title: "Duplicate", icon: .duplicate) { _ = try? book.duplicateSheet(i) },
+                                SigmaMenuItem(title: "Move left", icon: .moveLeft, enabled: i > 0) { try? book.moveSheet(from: i, to: i - 1) },
+                                SigmaMenuItem(title: "Move right", icon: .moveRight, enabled: i < count - 1) { try? book.moveSheet(from: i, to: i + 1) },
+                                SigmaMenuItem(title: "Delete", icon: .delete, destructive: true, enabled: count > 1) { try? book.deleteSheet(i) },
+                            ], at: frame)
                         }
                     }
                     if !readOnly {

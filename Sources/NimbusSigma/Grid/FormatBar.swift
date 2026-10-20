@@ -20,8 +20,6 @@ enum Palette {
 /// the panels: one row that scrolls sideways, over the grid.
 struct FormatBar: View {
     @ObservedObject var controller: SigmaGridController
-    /// Shares the sheet as a file; nil hides sharing.
-    var share: ((SigmaFormat) -> Void)?
     @State private var picking: ColorTarget?
 
     enum ColorTarget: String, Identifiable {
@@ -51,22 +49,22 @@ struct FormatBar: View {
                 colorButton(.text, icon: "character", swatch: s.textColor ?? "#1f2328", label: "Text colour")
                 colorButton(.fill, icon: "drop", swatch: s.fill, label: "Fill colour")
                 divider
-                Menu {
-                    Button { controller.setAlign(.left) } label: { Label("Left", systemImage: "text.alignleft") }
-                    Button { controller.setAlign(.center) } label: { Label("Centre", systemImage: "text.aligncenter") }
-                    Button { controller.setAlign(.right) } label: { Label("Right", systemImage: "text.alignright") }
-                    Button { controller.setAlign(nil) } label: { Label("Automatic", systemImage: "text.justify") }
-                } label: {
+                MenuButton(controller: controller, items: {
+                    let options: [(String, SigmaIcon?, SigmaStyle.Align?)] = [
+                        ("Left", .alignLeft, .left), ("Centre", .alignCenter, .center), ("Right", .alignRight, .right), ("Automatic", nil, nil),
+                    ]
+                    return options.map { title, glyph, a in
+                        SigmaMenuItem(title: title, icon: glyph, checked: s.align == a) { controller.setAlign(a) }
+                    }
+                }) {
                     icon(s.align == .center ? "text.aligncenter" : s.align == .right ? "text.alignright" : "text.alignleft")
                 }
                 .accessibilityLabel("Alignment")
-                Menu {
-                    ForEach([SigmaStyle.NumberFormat.auto, .number, .percent, .currency, .text], id: \.self) { f in
-                        Button { controller.setNumberFormat(f) } label: {
-                            if (s.numberFormat ?? .auto) == f { Label(name(f), systemImage: "checkmark") } else { Text(name(f)) }
-                        }
+                MenuButton(controller: controller, items: {
+                    [SigmaStyle.NumberFormat.auto, .number, .percent, .currency, .text].map { f in
+                        SigmaMenuItem(title: name(f), checked: (s.numberFormat ?? .auto) == f) { controller.setNumberFormat(f) }
                     }
-                } label: {
+                }) {
                     Text(short(s.numberFormat ?? .auto)).font(.system(size: 14, weight: .medium)).frame(minWidth: 36, minHeight: 36)
                 }
                 .accessibilityLabel("Number format")
@@ -81,15 +79,14 @@ struct FormatBar: View {
                 Button { controller.setFontSize((s.fontSize ?? 13) + 1) } label: { icon("plus") }
                     .accessibilityLabel("Larger text")
                 divider
-                Menu {
-                    Button { controller.setBorders(.all) } label: { Label("All borders", systemImage: "squareshape.split.2x2") }
-                    Button { controller.setBorders(.outer) } label: { Label("Outer border", systemImage: "square") }
-                    Button { controller.setBorders(.top) } label: { Label("Top", systemImage: "arrow.up.to.line") }
-                    Button { controller.setBorders(.bottom) } label: { Label("Bottom", systemImage: "arrow.down.to.line") }
-                    Button { controller.setBorders(.left) } label: { Label("Left", systemImage: "arrow.left.to.line") }
-                    Button { controller.setBorders(.right) } label: { Label("Right", systemImage: "arrow.right.to.line") }
-                    Button(role: .destructive) { controller.setBorders(.clear) } label: { Label("No borders", systemImage: "square.dashed") }
-                } label: { icon("squareshape.split.2x2") }
+                MenuButton(controller: controller, items: {
+                    let options: [(String, SigmaIcon, SigmaWorkbook.Borders)] = [
+                        ("All borders", .bordersAll, .all), ("Outer border", .bordersOuter, .outer), ("Top", .bordersTop, .top),
+                        ("Bottom", .bordersBottom, .bottom), ("Left", .bordersLeft, .left), ("Right", .bordersRight, .right),
+                        ("No borders", .bordersClear, .clear),
+                    ]
+                    return options.map { title, glyph, b in SigmaMenuItem(title: title, icon: glyph) { controller.setBorders(b) } }
+                }) { icon("squareshape.split.2x2") }
                 .accessibilityLabel("Borders")
                 Button { controller.clearFormatting() } label: { icon("eraser") }
                     .accessibilityLabel("Clear formatting")
@@ -100,10 +97,10 @@ struct FormatBar: View {
                     Text("ƒx").font(.system(size: 16, weight: .bold)).foregroundStyle(Color.primary).frame(width: 36, height: 36)
                 }
                 .accessibilityLabel("Insert function")
-                Menu {
-                    Button { controller.sort(ascending: true) } label: { Label("Sort A → Z", systemImage: "arrow.up") }
-                    Button { controller.sort(ascending: false) } label: { Label("Sort Z → A", systemImage: "arrow.down") }
-                } label: { icon("arrow.up.arrow.down") }
+                MenuButton(controller: controller, items: {
+                    [SigmaMenuItem(title: "Sort A → Z", icon: .sortAscending) { controller.sort(ascending: true) },
+                     SigmaMenuItem(title: "Sort Z → A", icon: .sortDescending) { controller.sort(ascending: false) }]
+                }) { icon("arrow.up.arrow.down") }
                 .accessibilityLabel("Sort")
                 Button { controller.insertChart() } label: { icon("chart.bar") }
                     .accessibilityLabel("Insert chart")
@@ -113,14 +110,6 @@ struct FormatBar: View {
                     .accessibilityLabel("Conditional formatting")
                 Button { controller.panel = .note } label: { icon(controller.activeNote.isEmpty ? "note.text.badge.plus" : "note.text") }
                     .accessibilityLabel(controller.activeNote.isEmpty ? "Add note" : "Edit note")
-                if let share {
-                    divider
-                    Menu {
-                        Button { share(.xlsx) } label: { Label("Excel workbook (.xlsx)", systemImage: "tablecells") }
-                        Button { share(.csv) } label: { Label("CSV of this sheet", systemImage: "doc.plaintext") }
-                    } label: { icon("square.and.arrow.up") }
-                    .accessibilityLabel("Share")
-                }
             }
             .padding(.horizontal, 8)
         }
@@ -208,48 +197,14 @@ struct MoreMenu: View {
     @ObservedObject var controller: SigmaGridController
 
     var body: some View {
-        Menu {
-            let f = controller.frozen
-            Menu {
-                Button("1 Row") { controller.freeze(rows: 1, columns: f.columns) }
-                Button("2 Rows") { controller.freeze(rows: 2, columns: f.columns) }
-                Button("1 Column") { controller.freeze(rows: f.rows, columns: 1) }
-                Button("Up to \(controller.selection.active.description)") {
-                    controller.freeze(rows: controller.selection.active.row + 1, columns: controller.selection.active.column + 1)
-                }
-                if f.rows > 0 || f.columns > 0 {
-                    Button("No Frozen Panes", role: .destructive) { controller.freeze(rows: 0, columns: 0) }
-                }
-            } label: { Label("Freeze", systemImage: "snowflake") }
-            Menu {
-                Button { controller.insertRows(above: true) } label: { Label("Insert Above", systemImage: "arrow.up.to.line.compact") }
-                Button { controller.insertRows(above: false) } label: { Label("Insert Below", systemImage: "arrow.down.to.line.compact") }
-                Button(role: .destructive) { controller.deleteRows() } label: { Label("Delete", systemImage: "trash") }
-            } label: { Label("Rows", systemImage: "rectangle.split.1x2") }
-            Menu {
-                Button { controller.insertColumns(left: true) } label: { Label("Insert Left", systemImage: "arrow.left.to.line.compact") }
-                Button { controller.insertColumns(left: false) } label: { Label("Insert Right", systemImage: "arrow.right.to.line.compact") }
-                Button(role: .destructive) { controller.deleteColumns() } label: { Label("Delete", systemImage: "trash") }
-            } label: { Label("Columns", systemImage: "rectangle.split.2x1") }
-            Menu {
-                Button { controller.startFill() } label: { Label("Drag to Fill…", systemImage: "square.and.arrow.down.on.square") }
-                Button { controller.fillDown() } label: { Label("Fill Down", systemImage: "arrow.down.to.line") }
-                Button { controller.fillRight() } label: { Label("Fill Right", systemImage: "arrow.right.to.line") }
-            } label: { Label("Fill", systemImage: "square.and.pencil") }
-            Menu {
-                Button { controller.sort(ascending: true) } label: { Label("Sort A → Z", systemImage: "arrow.up") }
-                Button { controller.sort(ascending: false) } label: { Label("Sort Z → A", systemImage: "arrow.down") }
-            } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
-            Divider()
-            Button { controller.pasteValues() } label: { Label("Paste Values Only", systemImage: "doc.on.clipboard") }
-                .disabled(!controller.canPasteValues)
-            Button { controller.panel = .note } label: { Label(controller.activeNote.isEmpty ? "Add Note" : "Edit Note", systemImage: "note.text") }
-        } label: {
-            Image(systemName: "ellipsis.circle")
+        MenuButton(controller: controller, items: { controller.grid?.moreMenu() ?? [] }) {
+            Image(systemName: "ellipsis")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(Color.primary)
+                .rotationEffect(.degrees(90))
                 .frame(width: 44, height: 44)
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("More")
     }
 }

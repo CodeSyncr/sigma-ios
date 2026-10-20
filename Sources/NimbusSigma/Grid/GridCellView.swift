@@ -14,6 +14,9 @@ enum GridColors {
     static let headerSelected = UIColor(red: 0.886, green: 0.945, blue: 0.898, alpha: 1)
     static let note = UIColor(red: 0.95, green: 0.6, blue: 0.0, alpha: 1)
     static let frozenLine = UIColor(red: 0.74, green: 0.76, blue: 0.79, alpha: 1)
+    /// The same two greys as the Android SDK, for menus and the header.
+    static let secondary = UIColor(red: 110 / 255, green: 116 / 255, blue: 124 / 255, alpha: 1)
+    static let surface = UIColor(red: 244 / 255, green: 245 / 255, blue: 247 / 255, alpha: 1)
 
     static func hex(_ s: String?) -> UIColor? {
         guard var h = s?.trimmingCharacters(in: .whitespaces), h.hasPrefix("#") else { return nil }

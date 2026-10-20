@@ -73,11 +73,15 @@ private struct MenuCard: View {
 
     @State private var stack: [SigmaMenuItem] = []
     @State private var forward = true
-    @State private var size: CGSize = .zero
     @State private var shown = false
 
     private static let width: CGFloat = 232
     private static let margin: CGFloat = 8
+    /// Every row is this tall (one line), so the card's height is known without measuring it.
+    private static let rowHeight: CGFloat = 40
+    private static let listPadding: CGFloat = 6
+    /// The cut, copy, paste and clear strip, with its rule.
+    private static let quickHeight: CGFloat = 4 + 58 + 4 + 1
     private static let gap: CGFloat = 4
     private static let ease = Animation.timingCurve(0.32, 0.72, 0, 1, duration: 0.12)
     private static let slide = Animation.timingCurve(0.32, 0.72, 0, 1, duration: 0.16)
@@ -96,11 +100,11 @@ private struct MenuCard: View {
                 .padding(.top, 4)
                 Rectangle().fill(Color(GridColors.gridline)).frame(height: 1).padding(.top, 4)
             }
-            ViewThatFits(in: .vertical) {
+            if listHeight > maxListHeight {
+                ScrollView(showsIndicators: false) { list }.frame(height: maxListHeight)
+            } else {
                 list
-                ScrollView(showsIndicators: false) { list }
             }
-            .frame(maxHeight: maxListHeight)
         }
         .frame(width: Self.width)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white))
@@ -109,10 +113,8 @@ private struct MenuCard: View {
         // Two layers, as on Android: a tight contact shadow and a wide soft one.
         .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
         .shadow(color: .black.opacity(0.16), radius: 14, y: 6)
-        .background(GeometryReader { g in Color.clear.preference(key: CardSize.self, value: g.size) })
-        .onPreferenceChange(CardSize.self) { size = $0 }
         .scaleEffect(shown ? 1 : 0.96, anchor: place.below ? .top : .bottom)
-        .opacity(shown && size != .zero ? 1 : 0)
+        .opacity(shown ? 1 : 0)
         .offset(x: place.x, y: place.y)
         .onAppear { withAnimation(Self.ease) { shown = true } }
         .environment(\.colorScheme, .light)
@@ -138,7 +140,7 @@ private struct MenuCard: View {
             let icons = items.contains { $0.icon != nil }
             ForEach(items) { item in row(item, icons: icons) }
         }
-        .padding(6)
+        .padding(Self.listPadding)
         .id(stack.count)
         .transition(.asymmetric(
             insertion: .offset(x: forward ? 40 : -40).combined(with: .opacity),
@@ -195,7 +197,8 @@ private struct MenuCard: View {
                 SigmaGlyph(icon: q.icon, size: 20, color: Color(GridColors.ink))
                 Text(q.label).font(.system(size: 11)).foregroundStyle(Color(GridColors.secondary))
             }
-            .frame(maxWidth: .infinity, minHeight: 58)
+            .frame(maxWidth: .infinity)
+            .frame(height: 58)
             .contentShape(Rectangle())
         }
         .buttonStyle(RowStyle())
@@ -211,7 +214,15 @@ private struct MenuCard: View {
     }
 
     private var maxListHeight: CGFloat {
-        area.height * 0.7 - (showsQuick ? 63 : 0)
+        area.height * 0.7 - (showsQuick ? Self.quickHeight : 0)
+    }
+
+    private var listHeight: CGFloat {
+        2 * Self.listPadding + Self.rowHeight * CGFloat(items.count + (stack.isEmpty ? 0 : 1))
+    }
+
+    private var cardHeight: CGFloat {
+        (showsQuick ? Self.quickHeight : 0) + min(listHeight, maxListHeight)
     }
 
     /// Where the card goes: by its anchor, flipped above when below would not fit, always on screen.
@@ -219,7 +230,7 @@ private struct MenuCard: View {
         let a = request.anchor.offsetBy(dx: -area.minX, dy: -area.minY)
         let b = bounds
         let w = Self.width
-        let h = size.height
+        let h = cardHeight
         let point = a.width == 0
         var x = point ? a.minX : (a.midX > b.midX ? a.maxX - w : a.minX)
         x = min(max(x, b.minX), max(b.minX, b.maxX - w))
@@ -227,11 +238,6 @@ private struct MenuCard: View {
         var y = below ? a.maxY + Self.gap : a.minY - Self.gap - h
         y = min(max(y, b.minY), max(b.minY, b.maxY - h))
         return (x, y, below)
-    }
-
-    private struct CardSize: PreferenceKey {
-        static var defaultValue: CGSize { .zero }
-        static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
     }
 }
 
@@ -246,7 +252,7 @@ private struct RowStyle: ButtonStyle {
 private extension View {
     func row() -> some View {
         padding(.horizontal, 10)
-            .frame(minHeight: 40)
+            .frame(height: 40)
             .contentShape(Rectangle())
     }
 }

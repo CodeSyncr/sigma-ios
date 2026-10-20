@@ -134,54 +134,18 @@ struct Settings: View {
 struct SheetScreen: View {
     @StateObject private var session: SigmaSession
     @StateObject private var grid = SigmaGridController()
-    @State private var shared: SigmaFile?
 
     init(id: Int) {
         // The session asks your server for a link when it opens, and again if one expires.
         _session = StateObject(wrappedValue: SigmaSession { try await YourServer.editLink(for: id) })
     }
 
+    // The editor's header has the back arrow (it pops this screen), the title, the save state and sharing.
     var body: some View {
         SigmaSheetView(session: session, controller: grid)
-            .navigationTitle(session.title.isEmpty ? "Sheet" : session.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    switch session.saveState {
-                    case .saving, .unsaved: ProgressView()
-                    case .failed: Image(systemName: "exclamationmark.icloud").foregroundColor(.red)
-                    case .saved: EmptyView()
-                    }
-                    Menu {
-                        Button("Fill in a sample") {
-                            try? session.workbook?.set([
-                                SigmaAddress("A1")!: "Item", SigmaAddress("B1")!: "Cost",
-                                SigmaAddress("A2")!: "Rent", SigmaAddress("B2")!: "1200",
-                                SigmaAddress("A3")!: "Food", SigmaAddress("B3")!: "450",
-                                SigmaAddress("A4")!: "Total", SigmaAddress("B4")!: "=SUM(B2:B3)",
-                            ])
-                        }
-                        Button("Export as Excel") { export(.xlsx) }
-                        Button("Export as CSV") { export(.csv) }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .disabled(session.phase != .ready)
-                }
-            }
-            .sheet(item: $shared) { file in
-                if let sheet = try? SigmaShareSheet(file: file) { sheet }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .task(id: session.phase == .ready) { await DemoTour.run(session: session, grid: grid) }
             .task(id: session.phase == .ready) { DemoVani.seed(session: session, grid: grid) }
-    }
-
-    private func export(_ format: SigmaFormat) {
-        Task {
-            guard let book = session.workbook, let data = try? await book.export(format) else { return }
-            let name = (session.title.isEmpty ? "Sheet" : session.title) + "." + format.fileExtension
-            shared = SigmaFile(data: data, filename: name, format: format)
-        }
     }
 }
 

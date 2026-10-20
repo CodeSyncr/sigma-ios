@@ -173,6 +173,7 @@ struct SheetScreen: View {
                 if let sheet = try? SigmaShareSheet(file: file) { sheet }
             }
             .task(id: session.phase == .ready) { await DemoTour.run(session: session, grid: grid) }
+            .task(id: session.phase == .ready) { DemoVani.seed(session: session, grid: grid) }
     }
 
     private func export(_ format: SigmaFormat) {
@@ -181,6 +182,24 @@ struct SheetScreen: View {
             let name = (session.title.isEmpty ? "Sheet" : session.title) + "." + format.fileExtension
             shared = SigmaFile(data: data, filename: name, format: format)
         }
+    }
+}
+
+/// With SIGMA_DEMO_VANI=1 the demo opens Vani with a sample conversation,
+/// to look at the panel without asking the model anything.
+enum DemoVani {
+    @MainActor
+    static func seed(session: SigmaSession, grid: SigmaGridController) {
+        guard ProcessInfo.processInfo.environment["SIGMA_DEMO_VANI"] == "1", session.phase == .ready else { return }
+        var done = SigmaAIMessage(role: .assistant, text: "I added a **Grand total** row under your data and made the header bold.\n- Costs show as rupees\n- A border separates the totals", patch: "{}", patchSummary: "2 cells · 6 formats")
+        done.applied = "2 cells, 6 formats"
+        grid.aiMessages = [
+            SigmaAIMessage(role: .user, text: "Add a total row and format it"),
+            done,
+            SigmaAIMessage(role: .user, text: "Highlight anything above ₹500"),
+            SigmaAIMessage(role: .assistant, text: "Rent is the only cost above ₹500. I can colour it amber so it stands out.", patch: "{}", patchSummary: "1 format rule"),
+        ]
+        grid.panel = .ai
     }
 }
 

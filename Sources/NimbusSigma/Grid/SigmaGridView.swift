@@ -28,6 +28,10 @@ public final class SigmaGridController: ObservableObject {
     @Published public internal(set) var selectedChart: String?
     /// Whether Vani AI is offered (the document's owner has it).
     @Published public internal(set) var aiAvailable = false
+    /// Whether Vani AI is answering right now, panel open or not.
+    @Published public internal(set) var aiWorking = false
+    /// Why Vani's last answer did not arrive, until the next question.
+    @Published var aiFailure: String?
     /// The conversation with Vani AI, kept while the sheet is open.
     @Published public var aiMessages: [SigmaAIMessage] = []
 

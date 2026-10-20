@@ -43,17 +43,6 @@ struct FormatBar: View {
     private var bar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                if controller.aiAvailable {
-                    Button { controller.panel = .ai } label: {
-                        Label("Vani AI", systemImage: "sparkles")
-                            .font(.system(size: 14, weight: .semibold))
-                            .padding(.horizontal, 10)
-                            .frame(height: 32)
-                            .foregroundStyle(.white)
-                            .background(LinearGradient(colors: [Color(red: 0.91, green: 0.3, blue: 0.24), Color(red: 0.98, green: 0.45, blue: 0.09)], startPoint: .leading, endPoint: .trailing), in: Capsule())
-                    }
-                    divider
-                }
                 toggle("bold", s.bold == true, "Bold") { controller.toggleBold() }
                 toggle("italic", s.italic == true, "Italic") { controller.toggleItalic() }
                 toggle("underline", s.underline == true, "Underline") { controller.toggleUnderline() }

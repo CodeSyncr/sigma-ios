@@ -128,6 +128,7 @@ struct SheetEditor: View {
                 Divider()
             }
             GridRepresentable(book: book, controller: controller, readOnly: readOnly)
+                .overlay { if controller.aiAvailable { VaniBall(controller: controller) } }
             FormulaHelpStrip(book: book, controller: controller)
             Divider()
             SheetTabs(book: book, controller: controller, readOnly: readOnly)
